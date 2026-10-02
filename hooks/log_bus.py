@@ -87,12 +87,13 @@ def main():
         if line:
             append(ACTIVITY, f"{int(time.time() * 1000)}|{line}")
     elif mode == "user":
-        prompt = (data.get("prompt") or "").strip()
+        prompt = " ".join((data.get("prompt") or "").split())
         if prompt:
             append(TRANSCRIPT, f"YOU: {prompt}")
     elif mode == "reply":
         text = last_assistant_text(data.get("transcript_path", ""))
         if text:
+            text = " ".join(text.split())
             append(TRANSCRIPT, f"JANUS: {text}")
     elif mode == "idle":
         append(ACTIVITY, f"{int(time.time() * 1000)}|__IDLE__")
