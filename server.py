@@ -187,12 +187,29 @@ def read_bus():
             "alert": alert, "loading": loading, "rate_limits": rate_limits}
 
 
+def read_log(name, max_lines=60):
+    # Written by Claude Code's hooks (log_bus.py), not the voice line --
+    # so this is silent (empty list) rather than falling back to idle
+    # the way read_bus() does, when nothing has logged yet.
+    try:
+        text = (BUS / name).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return text.splitlines()[-max_lines:]
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         try:
             if path == "/state":
                 self._send(json.dumps(read_bus()).encode(),
+                           "application/json")
+            elif path == "/activity":
+                self._send(json.dumps({"lines": read_log(".activity_log")}).encode(),
+                           "application/json")
+            elif path == "/transcript":
+                self._send(json.dumps({"lines": read_log(".transcript_log")}).encode(),
                            "application/json")
             elif path == "/config":
                 out = {"name": CFG["name"], "badge": CFG["badge"],

@@ -26,10 +26,29 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{width:100%;height:100%;background:#0a0507;overflow:hidden;cursor:none}
   canvas#stage{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+  .hud-panel{position:fixed;left:0;right:0;z-index:5;cursor:auto;
+    font:12px/1.5 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);background:rgba(10,5,7,.74);
+    padding:8px 18px;overflow-y:auto}
+  .hud-panel .line{white-space:pre-wrap;word-break:break-word;opacity:.92}
+  #activity-panel{top:0;padding:6px 18px;font-size:11px;overflow:hidden;
+    border-bottom:1px solid rgba(182,2,50,.5)}
+  #activity-panel .line{color:rgb(255,150,90);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  #activity-panel .t{color:rgb(255,205,150);opacity:.85}
+  #transcript-panel{bottom:0;max-height:24vh;border-top:1px solid rgba(182,2,50,.5);
+    display:flex;flex-direction:column}
+  #transcript-panel .line{max-width:70%}
+  #transcript-panel .you{color:rgb(255,215,222);text-align:left;margin-right:auto}
+  #transcript-panel .janus{color:rgb(255,110,150);text-align:right;margin-left:auto}
+  .hud-panel::-webkit-scrollbar{width:8px}
+  .hud-panel::-webkit-scrollbar-thumb{background:rgba(182,2,50,.55);border-radius:4px}
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
+<div id="activity-panel" class="hud-panel"></div>
+<div id="transcript-panel" class="hud-panel"></div>
 <script src="../../core.js"></script>
 <script>
 "use strict";
@@ -505,7 +524,8 @@ function frame(dt){
     else peakH[i]*=Math.pow(.98,dt60);
   }
 
-  const cxp=W>>1, cyp=H>>1;
+  const cxp=W>>1;
+  const cyp=(activityPanel.offsetHeight+(H-transcriptPanel.offsetHeight))/2;
   const innerR=Math.min(cxp,cyp)*.42;
   const maxLen=Math.min(cxp,cyp)*.65;
   rotation+=.002*dt60;
@@ -692,6 +712,60 @@ addEventListener("keydown",e=>{
       :document.documentElement.requestFullscreen();
   }
 });
+
+/* ---------------- activity + transcript panels ----------------
+   Top: a live readout of what Janus is doing (one line per tool call,
+   from a Claude Code PreToolUse hook). Bottom: the conversation itself
+   (UserPromptSubmit + Stop hooks). Both are plain log tails served by
+   server.py from files the hooks append to -- polled, not pushed, so
+   this stays a dumb reader with no state of its own. */
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+const activityPanel=document.getElementById("activity-panel");
+const transcriptPanel=document.getElementById("transcript-panel");
+let actTs=0,actText="";
+function fmtElapsed(ms){
+  const s=Math.max(0,Math.floor(ms/1000));
+  const m=Math.floor(s/60),r=s%60;
+  return m>0?`${m}:${String(r).padStart(2,"0")}`:`${r}s`;
+}
+function renderActivity(){
+  if(!actText){activityPanel.innerHTML="";return}
+  const t=fmtElapsed(Date.now()-actTs);
+  activityPanel.innerHTML=`<div class="line">${esc(actText)} <span class="t">${t}</span></div>`;
+}
+async function pollLog(url,el,isTranscript){
+  let lines;
+  try{
+    const r=await fetch(url,{cache:"no-store"});
+    lines=(await r.json()).lines||[];
+  }catch(e){return}
+  if(!isTranscript){
+    const last=lines[lines.length-1]||"";
+    const bar=last.indexOf("|");
+    if(bar<0){actTs=0;actText=last}
+    else{
+      const ts=parseInt(last.slice(0,bar),10);
+      const text=last.slice(bar+1);
+      if(text==="__IDLE__"){actTs=0;actText=""}
+      else if(ts!==actTs){actTs=ts;actText=text}
+    }
+    renderActivity();
+    return;
+  }
+  const atBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-4;
+  el.innerHTML=lines.map(l=>{
+    let cls="line";
+    if(l.startsWith("YOU: "))cls="line you";
+    else if(l.startsWith("JANUS: "))cls="line janus";
+    return `<div class="${cls}">${esc(l)}</div>`;
+  }).join("");
+  if(atBottom)el.scrollTop=el.scrollHeight;
+}
+if(!AV.demo){
+  setInterval(()=>pollLog("/activity",activityPanel,false),1000);
+  setInterval(()=>pollLog("/transcript",transcriptPanel,true),1000);
+  setInterval(renderActivity,250);
+}
 
 if(SHOT){
   AV.shotRun(frame);
