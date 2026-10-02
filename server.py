@@ -56,6 +56,7 @@ Ctrl-C stops.
 import json
 import math
 import mimetypes
+import subprocess
 import sys
 import threading
 import time
@@ -266,6 +267,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+# On Windows, prefer the installed Chrome app (a windowed, chrome-less app
+# view) over the system default browser, when Chrome is where we expect it.
+# The app-id is bound to a URL in Chrome's own app registry (set when the
+# app was installed); it's keyed to the Chrome profile, not this machine, so
+# it travels across machines signed into the same profile.
+CHROME_PROXY = Path(r"C:\Program Files\Google\Chrome\Application\chrome_proxy.exe")
+CHROME_APP_ID = "pfhngcmbfeloekfgoeblabklkjhmadjp"
+CHROME_PROFILE = "Profile 4"
+
+
+def open_face(url):
+    if sys.platform == "win32" and CHROME_PROXY.exists():
+        subprocess.Popen([
+            str(CHROME_PROXY),
+            f"--profile-directory={CHROME_PROFILE}",
+            f"--app-id={CHROME_APP_ID}",
+        ])
+    else:
+        webbrowser.open(url)
+
+
 if __name__ == "__main__":
     mode = f"MOCK={MOCK}" if MOCK else f"bus: {BUS}"
     root = f"http://127.0.0.1:{PORT}/"
@@ -279,7 +301,7 @@ if __name__ == "__main__":
     # window closed. The end-user symptom was "I can hear my agent but the
     # face never shows up", with the face running perfectly the entire time.
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     except OSError as e:
         if e.errno not in (errno.EADDRINUSE, errno.EACCES):
             raise
@@ -295,7 +317,7 @@ if __name__ == "__main__":
         if mine:
             print(f"already running at {root}  opening it instead", flush=True)
             if not NO_OPEN:
-                webbrowser.open(url)
+                open_face(url)
             sys.exit(0)
         print(f"port {PORT} is taken by something that is not this server.",
               flush=True)
@@ -305,7 +327,7 @@ if __name__ == "__main__":
     srv.allow_reuse_address = True
     print(f"ai-visualizer on {root}  opening {url}  ({mode})  Ctrl-C stops", flush=True)
     if not NO_OPEN:
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.6, lambda: open_face(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
