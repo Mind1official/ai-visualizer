@@ -24,7 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <title>The Radial</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  html,body{width:100%;height:100%;background:#050907;overflow:hidden;cursor:none}
+  html,body{width:100%;height:100%;background:#0a0507;overflow:hidden;cursor:none}
   canvas#stage{position:fixed;inset:0;width:100vw;height:100vh;display:block}
 </style>
 </head>
@@ -58,8 +58,8 @@ AV.init({});
 AV.ready(a=>{document.title=a.name+" Radial";});
 
 const NUM_BARS=80;
-const BG="#050907";
-const BAR_COLORS=[[16,74,38],[26,118,60],[40,170,86],[74,240,122],[105,250,150],[160,255,195]];
+const BG="#0a0507";
+const BAR_COLORS=[[74,8,24],[120,10,36],[182,2,50],[224,40,80],[255,90,120],[255,170,180]];
 const SMOOTHING=.3, GRAVITY=.92;
 const SENSITIVITY=.55;
 const MAX_PARTICLES=300, SPAWN_THRESHOLD=.6;
@@ -137,10 +137,10 @@ function orbBuild(){
                       :Math.pow(r32(),1/3)*.85;
     orb.twP[i]=r32()*6.2832;
     orb.twS[i]=.12+r32()*.33;         // slow organic shimmer
-    // randomized vivid greens: every grain its own hue
-    if(r32()<.10){orb.cols[i*3]=225;orb.cols[i*3+1]=255;orb.cols[i*3+2]=235}
+    // randomized vivid crimsons: every grain its own hue
+    if(r32()<.10){orb.cols[i*3]=255;orb.cols[i*3+1]=225;orb.cols[i*3+2]=235}
     else{
-      const h=.26+r32()*.18, s2=.82+r32()*.18, v2=.92+r32()*.08;
+      const h=.93+r32()*.06, s2=.82+r32()*.18, v2=.92+r32()*.08;
       const f=(n)=>{const k=(n+h*6)%6;
         return v2-v2*s2*Math.max(0,Math.min(k,4-k,1))};
       orb.cols[i*3]=f(5)*255;orb.cols[i*3+1]=f(3)*255;orb.cols[i*3+2]=f(1)*255;
@@ -262,7 +262,7 @@ function buildGalaxy(){
   nebula=document.createElement("canvas");
   nebula.width=W;nebula.height=H;
   const g=nebula.getContext("2d");
-  const colors=[[10,62,32],[8,50,28],[10,34,26],[16,74,40],[6,30,16],[12,56,34]];
+  const colors=[[62,10,24],[50,8,22],[34,10,20],[74,16,30],[30,6,14],[56,12,26]];
   for(let i=0;i<35;i++){
     const bx=Math.random()*W,by=Math.random()*H;
     const col=colors[Math.random()*colors.length|0];
@@ -317,7 +317,7 @@ function drawSonar(cxp,cyp,innerR,maxLen,dt60){
   for(const rp of ripples){
     rp[0]+=1.6*dt60;rp[1]-=.55*dt60;
     if(rp[1]>0&&rp[0]<maxR*1.1){
-      ctx.strokeStyle=`rgba(74,240,122,${rp[1]/255})`;
+      ctx.strokeStyle=`rgba(224,40,80,${rp[1]/255})`;
       ctx.lineWidth=2;
       ctx.beginPath();ctx.arc(cxp,cyp,rp[0],0,6.29);ctx.stroke();
     }
@@ -337,7 +337,7 @@ function drawScanner(cxp,cyp,innerR,fade,dt60){
     const a=scanA-span*(1-t);
     const alpha=t*t*fade*.86;
     if(alpha<=0)continue;
-    ctx.fillStyle=`rgba(140,255,185,${alpha})`;
+    ctx.fillStyle=`rgba(255,140,170,${alpha})`;
     ctx.beginPath();
     ctx.arc(cxp+Math.cos(a)*radius,cyp+Math.sin(a)*radius,
             Math.max(1,1+t*3),0,6.29);
@@ -345,17 +345,17 @@ function drawScanner(cxp,cyp,innerR,fade,dt60){
   }
   const hx=cxp+Math.cos(scanA)*radius, hy=cyp+Math.sin(scanA)*radius;
   for(let i=4;i>0;i--){
-    ctx.fillStyle=`rgba(190,255,220,${fade/(i+2)})`;
+    ctx.fillStyle=`rgba(255,190,210,${fade/(i+2)})`;
     ctx.beginPath();ctx.arc(hx,hy,4+i*3,0,6.29);ctx.fill();
   }
-  ctx.fillStyle=`rgba(235,255,245,${fade})`;
+  ctx.fillStyle=`rgba(255,235,240,${fade})`;
   ctx.beginPath();ctx.arc(hx,hy,4,0,6.29);ctx.fill();
 }
 
 const constel=[];
 function buildConstellation(){
   constel.length=0;
-  const cols=[[150,255,190],[205,255,225],[74,240,122],[105,250,150]];
+  const cols=[[255,150,180],[255,205,220],[224,40,80],[255,90,120]];
   for(let i=0;i<22;i++){
     constel.push({angle:Math.random()*6.2832,rf:1.45+Math.random()*1.1,
       drift:(Math.random()-.5)*.0024,
@@ -438,9 +438,9 @@ function colorFor(h){
          BAR_COLORS[lo][2]+(BAR_COLORS[hi][2]-BAR_COLORS[lo][2])*f|0];
 }
 function drawRings(cxp,cyp,innerR,maxLen){
-  const rings=[[bassE,innerR+maxLen*.25,[26,118,60]],
-               [midE,innerR+maxLen*.50,[40,170,86]],
-               [highE,innerR+maxLen*.75,[105,250,150]]];
+  const rings=[[bassE,innerR+maxLen*.25,[120,10,36]],
+               [midE,innerR+maxLen*.50,[182,2,50]],
+               [highE,innerR+maxLen*.75,[255,90,120]]];
   for(const[e,baseR,col]of rings){
     if(e<.05)continue;
     ctx.strokeStyle=`rgba(${col[0]},${col[1]},${col[2]},${Math.min(1,e*.7)})`;
@@ -454,10 +454,10 @@ function drawPulse(cxp,cyp,innerR){
   pulseR+=(target-pulseR)*.15;
   if(overall>.05){
     const alpha=Math.min(.78,overall*1.18);
-    ctx.strokeStyle=`rgba(74,240,122,${alpha/3})`;
+    ctx.strokeStyle=`rgba(224,40,80,${alpha/3})`;
     ctx.lineWidth=6;
     ctx.beginPath();ctx.arc(cxp,cyp,pulseR+8,0,6.29);ctx.stroke();
-    ctx.strokeStyle=`rgba(160,255,195,${alpha})`;
+    ctx.strokeStyle=`rgba(255,170,180,${alpha})`;
     ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(cxp,cyp,pulseR,0,6.29);ctx.stroke();
   }
@@ -551,7 +551,7 @@ function frame(dt){
     const a=(20+40*breath)/255;
     const r=baseSize*.55+breath*18;
     for(let i=5;i>0;i--){
-      ctx.fillStyle=`rgba(52,190,100,${a/(i+1)})`;
+      ctx.fillStyle=`rgba(182,20,55,${a/(i+1)})`;
       ctx.beginPath();ctx.arc(cxp,cyp,r+i*14,0,6.29);ctx.fill();
     }
   }
@@ -560,7 +560,7 @@ function frame(dt){
     const a=Math.min(.78,imgEnergy*1.57);
     const r=baseSize*.6+imgEnergy*60;
     for(let i=6;i>0;i--){
-      ctx.fillStyle=`rgba(52,190,100,${a/(i+1)})`;
+      ctx.fillStyle=`rgba(182,20,55,${a/(i+1)})`;
       ctx.beginPath();ctx.arc(cxp,cyp,r+i*16,0,6.29);ctx.fill();
     }
   }
@@ -593,7 +593,7 @@ function frame(dt){
     ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
     // peak dot
     if(peakLen>barLen+4){
-      ctx.fillStyle="rgb(160,255,195)";
+      ctx.fillStyle="rgb(255,170,180)";
       ctx.beginPath();
       ctx.arc(cxp+ca*(innerR+peakLen),cyp+sa*(innerR+peakLen),
               Math.max(2,thickness>>1),0,6.29);
@@ -623,17 +623,17 @@ function frame(dt){
   {
     const S=orb.S;
     const half=S/2;
-    ctx.fillStyle="rgb(4,12,8)";
+    ctx.fillStyle="rgb(12,4,6)";
     ctx.beginPath();ctx.arc(cxp,cyp,S*.44/1.55,0,6.29);ctx.fill();
     ctx.globalCompositeOperation="lighter";
     ctx.drawImage(orbSurf,cxp-half,cyp-half);
     ctx.globalCompositeOperation="source-over";
     const rRing=S*.50/1.55;                       // canvas is 1.55x the orb
-    ctx.strokeStyle="rgb(60,150,95)";ctx.lineWidth=1;
+    ctx.strokeStyle="rgb(150,30,60)";ctx.lineWidth=1;
     ctx.beginPath();ctx.arc(cxp,cyp,rRing,0,6.29);ctx.stroke();
-    ctx.strokeStyle="rgb(47,107,70)";
+    ctx.strokeStyle="rgb(107,30,55)";
     ctx.beginPath();ctx.arc(cxp,cyp,rRing*1.10,0,6.29);ctx.stroke();
-    ctx.strokeStyle="rgb(66,165,105)";
+    ctx.strokeStyle="rgb(165,40,70)";
     for(let i=0;i<36;i++){
       const a=i*10*Math.PI/180;
       const r1=rRing*1.10, r2=rRing*(i%3===0?1.14:1.12);
@@ -643,7 +643,7 @@ function frame(dt){
       ctx.stroke();
     }
     if(!orbFont)orbFont="10px 'SF Mono',Menlo,Consolas,monospace";
-    ctx.font=orbFont;ctx.fillStyle="rgb(110,220,150)";
+    ctx.font=orbFont;ctx.fillStyle="rgb(220,60,100)";
     ctx.textAlign="center";ctx.textBaseline="middle";
     for(const[txt,ang]of[["NEURAL NET",-60],["SYS LINK",30],["CORE 01",120],["AUX FEED",210]]){
       const a=ang*Math.PI/180;
@@ -669,9 +669,9 @@ function drawUsage(){
   ctx.textAlign="left";ctx.textBaseline="alphabetic";
   let y=H-16-(rows.length-1)*(fs+6);
   for(const r of rows){
-    ctx.fillStyle="rgb(78,120,96)";
+    ctx.fillStyle="rgb(120,60,78)";
     ctx.fillText(r.label,18,y);
-    ctx.fillStyle=r.hot?"rgb(255,110,90)":"rgb(110,220,150)";
+    ctx.fillStyle=r.hot?"rgb(255,110,90)":"rgb(220,80,120)";
     ctx.fillText(r.text,18+fs*2.4,y);
     y+=fs+6;
   }
