@@ -837,8 +837,12 @@ async function pollLog(url,el,isTranscript){
   const atBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-4;
   el.innerHTML=lines.map(l=>{
     let cls="line";
+    /* Speaker-agnostic: the assistant's tag is its CONFIGURED name
+       (backtalk's `name`), not the literal "JANUS" this used to match --
+       so a renamed agent's lines simply lost their styling. Anything
+       tagged and not the user is the assistant; there are only two. */
     if(l.startsWith("YOU: "))cls="line you";
-    else if(l.startsWith("JANUS: "))cls="line janus";
+    else if(/^[^:]{1,24}: /.test(l))cls="line janus";
     return `<div class="${cls}">${esc(l)}</div>`;
   }).join("");
   if(atBottom)el.scrollTop=el.scrollHeight;

@@ -21,7 +21,14 @@ from pathlib import Path
 BUS_DIR = Path(r"E:/Jarvis/backtalk")
 ACTIVITY = BUS_DIR / ".activity_log"
 TRANSCRIPT = BUS_DIR / ".transcript_log"
+# The uuid of the last reply we logged, so a Stop hook can tell a
+# genuinely new reply from the previous turn's still-stale one.
+LAST_REPLY = BUS_DIR / ".transcript_last"
 MAX_LINES = 200
+# How long to wait for the CLI to flush this turn's reply to the
+# transcript file before giving up. See wait_for_reply().
+REPLY_WAIT_S = 1.0
+REPLY_POLL_S = 0.1
 
 
 def append(path, line):
@@ -53,12 +60,13 @@ def summarize_tool(name, inp):
 
 
 def last_assistant_text(transcript_path):
+    """The newest assistant text in the transcript, with its uuid."""
     try:
         lines = Path(transcript_path).read_text(
             encoding="utf-8", errors="replace"
         ).splitlines()
     except OSError:
-        return None
+        return None, None
     for line in reversed(lines):
         try:
             obj = json.loads(line)
@@ -71,8 +79,46 @@ def last_assistant_text(transcript_path):
                  if isinstance(p, dict) and p.get("type") == "text"]
         text = " ".join(t for t in texts if t).strip()
         if text:
+            return text, obj.get("uuid")
+    return None, None
+
+
+def wait_for_reply(transcript_path):
+    """This turn's reply, waiting out the flush that made it lag.
+
+    The Stop hook can fire BEFORE the CLI has written the turn's final
+    assistant message to the transcript file, so a naive read returns
+    the PREVIOUS turn's reply -- the panel then sat exactly one turn
+    behind forever. Identity, not recency, is what settles it: we
+    remember the uuid we logged last time and poll until a different
+    one shows up.
+
+    KNOWN LIMIT: waiting does not actually fix this. The CLI writes the
+    turn's assistant message AFTER its Stop hooks complete, so the line
+    we want cannot appear while we are still blocking for it -- the wait
+    only guarantees we never log the SAME line twice. The real cure is
+    for whatever produced the reply to publish it (backtalk does this in
+    signals.transcript); this stays for setups with no voice line, where
+    one turn behind beats nothing at all.
+
+    Bounded, and gives up quietly rather than logging a known-stale
+    line: a missing line is honest, a wrong one is not."""
+    try:
+        seen = LAST_REPLY.read_text(encoding="utf-8").strip()
+    except OSError:
+        seen = ""
+    deadline = time.time() + REPLY_WAIT_S
+    while True:
+        text, uuid = last_assistant_text(transcript_path)
+        if text and uuid and uuid != seen:
+            try:
+                LAST_REPLY.write_text(uuid, encoding="utf-8")
+            except OSError:
+                pass
             return text
-    return None
+        if time.time() >= deadline:
+            return None
+        time.sleep(REPLY_POLL_S)
 
 
 def main():
@@ -91,7 +137,7 @@ def main():
         if prompt:
             append(TRANSCRIPT, f"YOU: {prompt}")
     elif mode == "reply":
-        text = last_assistant_text(data.get("transcript_path", ""))
+        text = wait_for_reply(data.get("transcript_path", ""))
         if text:
             text = " ".join(text.split())
             append(TRANSCRIPT, f"JANUS: {text}")
