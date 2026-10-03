@@ -27,6 +27,9 @@ Serves the face gallery at http://127.0.0.1:8790/ and exposes:
             "alert":  bool,          optional attention signal
             "loading": bool}         true while the voice line plays its
                                      own thinking sound (we stay quiet)
+  /context how full the agent's context window is, or {} when the
+           voice line is not publishing it:
+           {"used", "total", "free", "pct", "categories", "ts"}
   /config  the merged ai-visualizer.json plus the list of installed
            faces, discovered by scanning the faces/ folder. Drop a new
            folder with an index.html into faces/ and it appears in the
@@ -39,6 +42,7 @@ voice line (backtalk writes them natively, github.com/jaredrhod/backtalk):
   .voice_waveform     JSON {ts, samples: [64 floats]} while audio plays
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
+  .voice_context      optional: JSON context-window fill (show_context)
 
 Where the bus lives comes from "bus_dir" in ai-visualizer.json (default:
 this folder). Point it at your backtalk folder, or point backtalk's
@@ -188,6 +192,30 @@ def read_bus():
             "alert": alert, "loading": loading, "rate_limits": rate_limits}
 
 
+def read_context():
+    """The context-window fill, or {} when nothing is publishing it.
+
+    Polled far less often than /state by design: this only changes once
+    per completed turn, so a face has no reason to ask 8x a second.
+
+    A stale reading is kept rather than blanked. The numbers stay true
+    until the next turn rewrites them, and a meter that holds its last
+    honest value beats one that flickers to empty between turns."""
+    if MOCK:
+        total = 200000
+        used = int(total * 0.42)
+        return {"used": used, "total": total, "free": total - used,
+                "pct": 0.42, "ts": time.time(),
+                "categories": [{"name": "System prompt", "tokens": 3100},
+                               {"name": "Tools", "tokens": 11800},
+                               {"name": "Messages", "tokens": 69100},
+                               {"name": "Free space", "tokens": 116000}]}
+    try:
+        return json.loads((BUS / ".voice_context").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def read_log(name, max_lines=60):
     # Written by Claude Code's hooks (log_bus.py), not the voice line --
     # so this is silent (empty list) rather than falling back to idle
@@ -211,6 +239,9 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json")
             elif path == "/transcript":
                 self._send(json.dumps({"lines": read_log(".transcript_log")}).encode(),
+                           "application/json")
+            elif path == "/context":
+                self._send(json.dumps(read_context()).encode(),
                            "application/json")
             elif path == "/config":
                 out = {"name": CFG["name"], "badge": CFG["badge"],
