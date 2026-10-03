@@ -9,6 +9,11 @@ JSON off stdin:
   idle      Stop         -> appends an __IDLE__ marker so the activity
                             panel's timer clears instead of counting up
                             forever on the last tool call of the turn
+  compact   PreCompact   -> touches .voice_compacting so the faces can
+                            run their compaction animation while the CLI
+                            is folding the context down. Cleared by the
+                            next idle, since PreCompact has no "done"
+                            counterpart to fire on.
 
 Never raises past main(): a hook that errors can interrupt the session,
 so every failure here is swallowed silently rather than surfaced.
@@ -24,6 +29,9 @@ TRANSCRIPT = BUS_DIR / ".transcript_log"
 # The uuid of the last reply we logged, so a Stop hook can tell a
 # genuinely new reply from the previous turn's still-stale one.
 LAST_REPLY = BUS_DIR / ".transcript_last"
+# Touched at PreCompact, removed at the next Stop: the faces treat its
+# presence (and freshness) as "compaction in progress".
+COMPACTING = BUS_DIR / ".voice_compacting"
 MAX_LINES = 200
 # How long to wait for the CLI to flush this turn's reply to the
 # transcript file before giving up. See wait_for_reply().
@@ -141,7 +149,11 @@ def main():
         if text:
             text = " ".join(text.split())
             append(TRANSCRIPT, f"JANUS: {text}")
+    elif mode == "compact":
+        COMPACTING.write_text(str(time.time()), encoding="utf-8")
+        append(ACTIVITY, f"{int(time.time() * 1000)}|Compacting context")
     elif mode == "idle":
+        COMPACTING.unlink(missing_ok=True)
         append(ACTIVITY, f"{int(time.time() * 1000)}|__IDLE__")
 
 

@@ -73,6 +73,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STATES = {"idle", "listening", "thinking", "speaking"}
 WAVEFORM_STALE_S = 0.6
+# How long a .voice_compacting touch stays believable (see read_bus).
+COMPACTING_STALE_S = 300
 
 DEFAULTS = {
     "name": "JARVIS",       # shown on the chip / headers, yours to change
@@ -144,6 +146,7 @@ def mock_bus():
         ]
     return {"state": MOCK, "level": level, "samples": samples,
             "alert": False, "loading": MOCK == "thinking",
+            "compacting": MOCK == "compacting",
             # Faked so the usage readout can be looked at without
             # spending a real session to make it appear.
             "rate_limits": {
@@ -180,6 +183,16 @@ def read_bus():
     except OSError:
         alert = False
     loading = (BUS / ".voice_loading_pid").exists()
+    # Touched by the PreCompact hook and cleared at the next Stop. The
+    # staleness bound is the real safety net: PreCompact has no "done"
+    # event, so a session that dies mid-compaction would otherwise leave
+    # every face animating a compaction that ended hours ago.
+    compacting = False
+    try:
+        age = time.time() - float((BUS / ".voice_compacting").read_text())
+        compacting = 0 <= age < COMPACTING_STALE_S
+    except (OSError, ValueError):
+        pass
     # Absent unless the voice line was told to publish it, which is the
     # normal case: it is the account holder's own spend and it stays off
     # until asked for. An empty dict simply means no readout.
@@ -189,7 +202,8 @@ def read_bus():
     except (OSError, ValueError):
         pass
     return {"state": state, "level": level, "samples": samples,
-            "alert": alert, "loading": loading, "rate_limits": rate_limits}
+            "alert": alert, "loading": loading, "rate_limits": rate_limits,
+            "compacting": compacting}
 
 
 def read_context():

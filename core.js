@@ -30,6 +30,7 @@
                    adaptively normalized — use this for motion)
      AV.samples    Float32Array(64), 0..1 normalized waveform ring
      AV.alert      bool, optional attention signal
+     AV.compacting bool, true while the context window is being compacted
      AV.micLevel   0..1 your microphone (only if init({mic:true}))
      AV.name       display name from config ("JARVIS" by default)
      AV.label      the dotted chip label ("J.A.R.V.I.S.")
@@ -148,6 +149,9 @@ const AV = (() => {
     if (DEMO) demoUpdate(dt);
     A.state = raw.state || "idle";
     A.alert = !!raw.alert;
+    // True while Claude Code folds the context down (PreCompact hook).
+    // A face that wants to show it reads AV.compacting; the rest ignore it.
+    A.compacting = !!raw.compacting;
     // Empty unless the voice line was told to publish usage. A face that
     // wants to draw it reads AV.rateLimits; every other face ignores it.
     A.rateLimits = raw.rate_limits || {};

@@ -77,6 +77,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex:none;text-decoration:none}
   #context-gauge .cg-legend em{margin-left:auto;font-style:normal;
     color:rgba(255,225,233,.9)}
+  /* PLAN USAGE -- the 5h and 7d windows. Lives directly ABOVE the context
+     gauge in the same right-hand column (it used to be painted on the
+     canvas bottom-left), so the three numbers that answer "how much room
+     is left" read as one stack. Bottom is set from JS, same as the gauge. */
+  #usage-gauge{position:fixed;right:18px;z-index:6;cursor:auto;
+    width:196px;padding:8px 12px 9px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #usage-gauge.on{opacity:1;transform:translateY(0)}
+  #usage-gauge .ug-head{letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase;margin-bottom:4px}
+  #usage-gauge .ug-row{display:flex;align-items:center;gap:7px;
+    font-size:10px;margin-top:3px}
+  #usage-gauge .ug-row b{font-weight:400;color:rgba(255,150,175,.8);
+    letter-spacing:.06em;width:18px;flex:none}
+  #usage-gauge .ug-row .ug-track{flex:1;height:4px;border-radius:3px;
+    background:rgba(255,190,205,.10);overflow:hidden}
+  #usage-gauge .ug-row .ug-track i{display:block;height:100%;
+    background:linear-gradient(90deg,#FF8AA6,#B60232)}
+  #usage-gauge .ug-row.hot .ug-track i{background:rgb(255,110,90)}
+  #usage-gauge .ug-row em{font-style:normal;color:rgba(255,225,233,.92);
+    width:30px;text-align:right;flex:none}
+  #usage-gauge .ug-row.hot em{color:rgb(255,130,110)}
+  #usage-gauge .ug-reset{font-size:9px;color:rgba(255,200,214,.62);
+    margin-left:25px}
   .hud-panel::-webkit-scrollbar{width:8px}
   .hud-panel::-webkit-scrollbar-thumb{background:rgba(182,2,50,.55);border-radius:4px}
 </style>
@@ -85,6 +116,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <canvas id="stage"></canvas>
 <div id="activity-panel" class="hud-panel"></div>
 <div id="transcript-panel" class="hud-panel"></div>
+<div id="usage-gauge"></div>
 <div id="context-gauge"></div>
 <script src="../../core.js"></script>
 <script>
@@ -709,10 +741,10 @@ function frame(dt){
     ctx.textAlign="left";ctx.textBaseline="alphabetic";
   }
 
-  drawUsage();
   drawMeters(AV.state,AV.env);
 
   if(AV.alert)drawAlert(cxp,cyp,innerR,dt60);
+  if(AV.compacting)drawCompacting(cxp,cyp,innerR);
 }
 
 /* How much of the bottom edge the transcript panel is covering. Canvas
@@ -723,6 +755,13 @@ function frame(dt){
 function chromeInset(){
   const p=document.getElementById("transcript-panel");
   return p?p.offsetHeight+10:0;
+}
+
+/* The mirror of chromeInset() for the top edge: how much of it the
+   activity panel is covering, so canvas chrome can clear it. */
+function topInset(){
+  const p=document.getElementById("activity-panel");
+  return p?p.offsetHeight:0;
 }
 
 /* MIC IN / AUDIO OUT bar meters, ported from the Neural face so the
@@ -759,24 +798,43 @@ function drawMeters(state,env){
   ctx.restore();
 }
 
-/* Plan usage, bottom-left. Drawn from AV.util.usageRows so this face cannot
-   disagree with the others about the same number, and silent when the voice
-   line publishes no usage. */
-function drawUsage(){
-  const rows=AV.util.usageRows();
-  if(!rows.length)return;
-  const fs=Math.max(9,Math.round(Math.min(W,H)*.014));
+/* ---------------- compaction ----------------
+   Runs while Claude Code folds the context window down (PreCompact hook
+   -> .voice_compacting -> AV.compacting). Three rings collapse inward to
+   the orb and a label pulses underneath: the whole point is that Mind can
+   tell at a glance that the pause is compaction and not a hang. Purely
+   time-driven, so it never needs state of its own. */
+function drawCompacting(cx,cy,innerR){
+  const t=performance.now()/1000;
+  const outer=innerR*2.7, inner=innerR*0.55;
   ctx.save();
-  ctx.font=`${fs}px 'SF Mono',Menlo,Consolas,monospace`;
-  ctx.textAlign="left";ctx.textBaseline="alphabetic";
-  let y=H-16-chromeInset()-(rows.length-1)*(fs+6);
-  for(const r of rows){
-    ctx.fillStyle="rgb(120,60,78)";
-    ctx.fillText(r.label,18,y);
-    ctx.fillStyle=r.hot?"rgb(255,110,90)":"rgb(220,80,120)";
-    ctx.fillText(r.text,18+fs*2.4,y);
-    y+=fs+6;
+  for(let i=0;i<3;i++){
+    const k=(t*0.55+i/3)%1;                 /* 0 outside -> 1 collapsed */
+    const r=outer-(outer-inner)*k;
+    const a=Math.sin(k*Math.PI)*0.7;         /* fade in and back out */
+    ctx.beginPath();
+    ctx.arc(cx,cy,r,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,120,155,${a.toFixed(3)})`;
+    ctx.lineWidth=2;
+    ctx.setLineDash([14,10]);
+    ctx.lineDashOffset=-t*40;
+    ctx.stroke();
   }
+  ctx.setLineDash([]);
+  /* a sweeping arc, so the collapse reads as work in progress */
+  ctx.beginPath();
+  ctx.arc(cx,cy,outer*0.92,t*2.2,t*2.2+0.9);
+  ctx.strokeStyle="rgba(224,20,76,.85)";ctx.lineWidth=3;ctx.stroke();
+  const pulse=0.55+0.45*Math.sin(t*3.4);
+  ctx.font="12px 'SF Mono',Menlo,Consolas,monospace";
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.fillStyle=`rgba(255,190,205,${pulse.toFixed(3)})`;
+  /* ABOVE the orb, not below: the transcript panel owns the bottom edge
+     and swallowed this label whole. Clamped under the activity panel so
+     it can't hide behind the top edge's chrome either. */
+  ctx.fillText("COMPACTING CONTEXT",cx,
+    Math.max(topInset()+14,cy-outer*0.92-22));
+  ctx.textAlign="left";ctx.textBaseline="alphabetic";
   ctx.restore();
 }
 
@@ -866,6 +924,37 @@ function cgTok(n){
 function cgPlace(){
   /* ride directly on top of the transcript panel, whatever its height */
   cgEl.style.bottom=(transcriptPanel.offsetHeight+20)+"px";
+  ugPlace();
+}
+
+/* ---------------- plan usage ----------------
+   The 5h and 7d rate-limit windows, stacked directly above the context
+   gauge. Same source as every other face (AV.util.usageRows), so they
+   cannot disagree about the same number, and hidden entirely when the
+   voice line publishes no usage. */
+const ugEl=document.getElementById("usage-gauge");
+function ugPlace(){
+  /* sit on the gauge when it is up, on the transcript when it is not */
+  const base=transcriptPanel.offsetHeight+20;
+  ugEl.style.bottom=(cgEl.classList.contains("on")
+    ? base+cgEl.offsetHeight+8 : base)+"px";
+}
+function ugRender(){
+  const rows=AV.util.usageRows();
+  if(!rows.length){ugEl.classList.remove("on");return}
+  ugEl.innerHTML='<div class="ug-head">Plan usage</div>'+rows.map(r=>{
+    /* usageRows packs "42%  resets in 3h" into one string; the bar wants
+       the number and the row wants the reset separately. */
+    const rel=r.text.split("  ").slice(1).join(" ").trim();
+    const w=r.known?Math.max(2,Math.min(100,r.pct)):0;
+    return `<div class="ug-row${r.hot?" hot":""}">`
+      +`<b>${esc(r.label)}</b>`
+      +`<span class="ug-track"><i style="width:${w}%"></i></span>`
+      +`<em>${r.known?r.pct+"%":"—"}</em></div>`
+      +(rel?`<div class="ug-reset">${esc(rel)}</div>`:"");
+  }).join("");
+  ugEl.classList.add("on");
+  ugPlace();
 }
 function cgRender(d){
   if(!d||!d.total){cgEl.classList.remove("on");return}
@@ -928,6 +1017,9 @@ if(!AV.demo){
 pollContext();
 setInterval(pollContext,5000);
 setInterval(cgPlace,1000);
+ugRender();
+setInterval(ugRender,5000);
+addEventListener("resize",ugPlace);
 /* core.js parks the thinking-sound toggle at the bottom-left edge, which
    the transcript panel also covers. Publish the inset so it can lift. */
 function publishInset(){
