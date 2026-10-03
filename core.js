@@ -225,7 +225,11 @@ const AV = (() => {
     // hidden until the mouse moves, so it never collides with a face's
     // chrome and never shows on camera or in an OBS source
     sndBtn.style.cssText =
-      "position:fixed;left:64px;bottom:14px;z-index:50;cursor:pointer;" +
+      // bottom offset reads --av-bottom-inset, which a face sets when it
+      // parks a panel along the bottom edge (the radial face's transcript
+      // window was covering this button entirely). Unset = plain 14px.
+      "position:fixed;left:64px;z-index:50;cursor:pointer;" +
+      "bottom:calc(14px + var(--av-bottom-inset, 0px));" +
       "font:12px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.2em;" +
       "color:#5a6a72;opacity:0;transition:opacity .4s;user-select:none;" +
       "pointer-events:none";

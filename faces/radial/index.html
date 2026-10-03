@@ -41,6 +41,42 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   #transcript-panel .line{max-width:70%}
   #transcript-panel .you{color:rgb(255,215,222);text-align:left;margin-right:auto}
   #transcript-panel .janus{color:rgb(255,110,150);text-align:right;margin-left:auto}
+  /* CONTEXT GAUGE -- sits on the right, just above the transcript.
+     Its bottom is set from JS so it rides on top of the transcript
+     panel however tall that grows. */
+  #context-gauge{position:fixed;right:18px;z-index:6;cursor:auto;
+    width:196px;padding:10px 12px 11px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #context-gauge.on{opacity:1;transform:translateY(0)}
+  #context-gauge .cg-head{display:flex;justify-content:space-between;
+    align-items:baseline;letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase}
+  #context-gauge .cg-head b{font-weight:400;letter-spacing:.06em;
+    color:rgba(255,120,155,.9)}
+  #context-gauge .cg-arc{display:block;margin:2px auto 0}
+  #context-gauge .cg-pct{font-size:21px;letter-spacing:.02em;
+    fill:rgb(255,225,233)}
+  #context-gauge .cg-pct-u{font-size:9px;fill:rgba(255,150,175,.8)}
+  #context-gauge .cg-nums{display:flex;justify-content:space-between;
+    font-size:10px;color:rgba(255,205,218,.85);margin-top:1px}
+  #context-gauge .cg-nums .sep{color:rgba(182,2,50,.8)}
+  #context-gauge .cg-bar{display:flex;height:4px;margin-top:7px;gap:1px;
+    border-radius:3px;overflow:hidden;background:rgba(255,190,205,.10)}
+  #context-gauge .cg-bar i{display:block;height:100%}
+  #context-gauge .cg-legend{margin-top:6px;display:grid;gap:2px}
+  #context-gauge .cg-legend div{display:flex;align-items:center;
+    gap:5px;font-size:9px;color:rgba(255,200,214,.78)}
+  #context-gauge .cg-legend s{width:6px;height:6px;border-radius:2px;
+    flex:none;text-decoration:none}
+  #context-gauge .cg-legend em{margin-left:auto;font-style:normal;
+    color:rgba(255,225,233,.9)}
   .hud-panel::-webkit-scrollbar{width:8px}
   .hud-panel::-webkit-scrollbar-thumb{background:rgba(182,2,50,.55);border-radius:4px}
 </style>
@@ -49,6 +85,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <canvas id="stage"></canvas>
 <div id="activity-panel" class="hud-panel"></div>
 <div id="transcript-panel" class="hud-panel"></div>
+<div id="context-gauge"></div>
 <script src="../../core.js"></script>
 <script>
 "use strict";
@@ -73,7 +110,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 const Q=new URLSearchParams(location.search);
 const SHOT=Q.get("shot");
-AV.init({});
+AV.init({mic:true});
 AV.ready(a=>{document.title=a.name+" Radial";});
 
 const NUM_BARS=80;
@@ -673,8 +710,53 @@ function frame(dt){
   }
 
   drawUsage();
+  drawMeters(AV.state,AV.env);
 
   if(AV.alert)drawAlert(cxp,cyp,innerR,dt60);
+}
+
+/* How much of the bottom edge the transcript panel is covering. Canvas
+   chrome (the usage rows, the meters) is painted UNDER that panel's
+   z-index, so anything drawn at H-16 is simply invisible behind it --
+   the bug this measurement exists to fix. Mirrors cgPlace(), which
+   solves the same problem for the context gauge. */
+function chromeInset(){
+  const p=document.getElementById("transcript-panel");
+  return p?p.offsetHeight+10:0;
+}
+
+/* MIC IN / AUDIO OUT bar meters, ported from the Neural face so the
+   radial face also shows Mind's own voice while he talks -- AV.micLevel
+   is live browser mic capture (AV.init mic:true), AV.env is Janus's
+   output envelope. Re-themed crimson; Neural's amber/cyan would fight
+   the palette. */
+let micHist=[],outHist=[];
+function drawMeters(state,env){
+  const inset=chromeInset();
+  const by=H-46-inset, n=46, bw=3, gap=4, h=22;
+  micHist.push(state==="listening"?AV.micLevel:AV.micLevel*.25);
+  micHist=micHist.slice(-n);
+  outHist.push(env);outHist=outHist.slice(-n);
+  ctx.save();
+  ctx.font="10px 'SF Mono',Menlo,Consolas,monospace";
+  ctx.textAlign="left";ctx.textBaseline="alphabetic";
+  const live=state==="listening", out=state==="speaking";
+  ctx.fillStyle=live?"rgb(255,150,175)":"rgba(255,190,205,.45)";
+  ctx.fillText("MIC IN",28,by-16);
+  for(let i=0;i<micHist.length;i++){
+    const bh=Math.max(1,micHist[i]*h|0);
+    ctx.fillStyle=live?"rgb(224,20,76)":"rgba(182,2,50,.5)";
+    ctx.fillRect(28+i*gap,by+h-bh,bw,bh);
+  }
+  const ox=W-28-n*gap;
+  ctx.fillStyle=out?"rgb(255,150,175)":"rgba(255,190,205,.45)";
+  ctx.fillText("AUDIO OUT",ox,by-16);
+  for(let i=0;i<outHist.length;i++){
+    const bh=Math.max(1,outHist[i]*h|0);
+    ctx.fillStyle=out?"rgb(255,90,120)":"rgba(182,2,50,.5)";
+    ctx.fillRect(ox+i*gap,by+h-bh,bw,bh);
+  }
+  ctx.restore();
 }
 
 /* Plan usage, bottom-left. Drawn from AV.util.usageRows so this face cannot
@@ -687,7 +769,7 @@ function drawUsage(){
   ctx.save();
   ctx.font=`${fs}px 'SF Mono',Menlo,Consolas,monospace`;
   ctx.textAlign="left";ctx.textBaseline="alphabetic";
-  let y=H-16-(rows.length-1)*(fs+6);
+  let y=H-16-chromeInset()-(rows.length-1)*(fs+6);
   for(const r of rows){
     ctx.fillStyle="rgb(120,60,78)";
     ctx.fillText(r.label,18,y);
@@ -761,11 +843,97 @@ async function pollLog(url,el,isTranscript){
   }).join("");
   if(atBottom)el.scrollTop=el.scrollHeight;
 }
+/* ---------------- context gauge ----------------
+   How full Janus's context window is, served by server.py from the
+   voice line's .voice_context signal. A semicircle arc for the fill,
+   the real token counts under it, and a stacked bar showing where the
+   window actually went. Polled every 5s, not every second: the numbers
+   only change when a turn completes. Absent signal = panel stays
+   hidden, so a face with no voice line behind it looks deliberate
+   rather than broken. */
+const cgEl=document.getElementById("context-gauge");
+const CG_R=46,CG_LEN=Math.PI*CG_R;          /* semicircle arc length */
+const CG_COLORS=["#B60232","#E0144C","#FF4D74","#FF8AA6","#FFC2D1"];
+function cgTok(n){
+  if(n>=1e6)return (n/1e6).toFixed(n>=1e7?0:1).replace(/\.0$/,"")+"M";
+  if(n>=1e3)return (n/1e3).toFixed(n>=1e5?0:1).replace(/\.0$/,"")+"k";
+  return String(n);
+}
+function cgPlace(){
+  /* ride directly on top of the transcript panel, whatever its height */
+  cgEl.style.bottom=(transcriptPanel.offsetHeight+20)+"px";
+}
+function cgRender(d){
+  if(!d||!d.total){cgEl.classList.remove("on");return}
+  const pct=Math.max(0,Math.min(1,d.pct||0));
+  const dash=(pct*CG_LEN).toFixed(1);
+  const cats=(d.categories||[])
+    .filter(c=>!/free|buffer/i.test(c.name)&&c.tokens>0)
+    .sort((a,b)=>b.tokens-a.tokens).slice(0,5);
+  const catTotal=cats.reduce((a,c)=>a+c.tokens,0)||1;
+  const bar=cats.map((c,i)=>
+    `<i style="width:${(c.tokens/catTotal*100).toFixed(2)}%;`
+    +`background:${CG_COLORS[i%CG_COLORS.length]}"></i>`).join("");
+  const legend=cats.slice(0,3).map((c,i)=>
+    `<div><s style="background:${CG_COLORS[i%CG_COLORS.length]}"></s>`
+    +`${esc(c.name)}<em>${cgTok(c.tokens)}</em></div>`).join("");
+  cgEl.innerHTML=
+    `<div class="cg-head"><span>Context</span><b>${cgTok(d.free)} free</b></div>`
+    +`<svg class="cg-arc" width="110" height="62" viewBox="0 0 110 62">`
+    +`<defs><linearGradient id="cgG" x1="0" y1="0" x2="1" y2="0">`
+    +`<stop offset="0" stop-color="#FF8AA6"/>`
+    +`<stop offset="1" stop-color="#B60232"/></linearGradient>`
+    +`<filter id="cgGlow" x="-50%" y="-50%" width="200%" height="200%">`
+    +`<feGaussianBlur stdDeviation="2.6" result="b"/>`
+    +`<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/>`
+    +`</feMerge></filter></defs>`
+    +`<path d="M9 55 A ${CG_R} ${CG_R} 0 0 1 101 55" fill="none"`
+    +` stroke="rgba(255,190,205,.16)" stroke-width="8"`
+    +` stroke-linecap="round"/>`
+    +`<path d="M9 55 A ${CG_R} ${CG_R} 0 0 1 101 55" fill="none"`
+    +` stroke="url(#cgG)" stroke-width="8" stroke-linecap="round"`
+    +` filter="url(#cgGlow)"`
+    +` stroke-dasharray="${dash} ${CG_LEN.toFixed(1)}"/>`
+    +`<text class="cg-pct" x="55" y="50" text-anchor="middle">`
+    +`${Math.round(pct*100)}<tspan class="cg-pct-u" dx="1">%</tspan></text>`
+    +`</svg>`
+    +`<div class="cg-nums"><span>${cgTok(d.used)} used</span>`
+    +`<span class="sep">/</span><span>${cgTok(d.total)} window</span></div>`
+    +(bar?`<div class="cg-bar">${bar}</div>`:"")
+    +(legend?`<div class="cg-legend">${legend}</div>`:"");
+  cgEl.classList.add("on");
+  cgPlace();
+}
+async function pollContext(){
+  try{
+    const r=await fetch("/context",{cache:"no-store"});
+    cgRender(await r.json());
+  }catch(e){}
+}
+
 if(!AV.demo){
   setInterval(()=>pollLog("/activity",activityPanel,false),1000);
   setInterval(()=>pollLog("/transcript",transcriptPanel,true),1000);
   setInterval(renderActivity,250);
 }
+/* Outside the demo guard on purpose: the activity and transcript tails
+   are real logs and would be meaningless in a demo, but the gauge reads
+   an endpoint that answers with sample numbers under --mock -- so it
+   belongs in demos and screenshots too. With no server at all the fetch
+   just fails and the panel stays hidden. */
+pollContext();
+setInterval(pollContext,5000);
+setInterval(cgPlace,1000);
+/* core.js parks the thinking-sound toggle at the bottom-left edge, which
+   the transcript panel also covers. Publish the inset so it can lift. */
+function publishInset(){
+  document.documentElement.style.setProperty(
+    "--av-bottom-inset",chromeInset()+"px");
+}
+publishInset();
+setInterval(publishInset,1000);
+addEventListener("resize",publishInset);
+addEventListener("resize",cgPlace);
 
 if(SHOT){
   AV.shotRun(frame);
