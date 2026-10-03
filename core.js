@@ -45,7 +45,7 @@
             loop deterministically, then sets document.title to
             "ready" (screenshot/verification harness)
 
-   The thinking sound: assets/thinking.wav plays while the state is
+   The thinking sound: assets/thinking-hum.wav plays while the state is
    "thinking", exactly like a voice line would play it. If the bus
    says the voice line is already playing its own (.voice_loading_pid),
    this player stays quiet — you never hear it twice. The speaker
@@ -219,7 +219,7 @@ const AV = (() => {
     if (SHOT) return;
     try { A._sndOn = localStorage.getItem("av_sound") !== "0"; }
     catch (e) { A._sndOn = true; }
-    audio = new Audio(new URL("assets/thinking.wav", ROOT).href);
+    audio = new Audio(new URL("assets/thinking-hum.wav", ROOT).href);
     audio.volume = 0.35;
     sndBtn = document.createElement("div");
     // hidden until the mouse moves, so it never collides with a face's
