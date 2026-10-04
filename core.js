@@ -419,9 +419,22 @@ const AV = (() => {
     // card can cover a lot of the animation, and wanting to look at the face
     // is not the same as being done with what is on it.
     addEventListener("keydown", e => {
+      // Ignore both while typing an answer, or "clear the stage" typed into
+      // the input box would wipe the screen a letter at a time.
+      if (promptShown) return;
       if (e.key === "s" || e.key === "S") {
         stageHidden = !stageHidden;
         stageWrap.style.display = stageHidden ? "none" : "flex";
+      } else if (e.key === "c" || e.key === "C") {
+        // Clears the STAGE only. The standing lists are a separate route and
+        // a separate file precisely so this key cannot take them with it.
+        stageHidden = false;
+        stageWrap.style.display = "flex";
+        fetch("/stage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ a: "clear" }),
+        }).catch(() => {});
       }
     });
   }
