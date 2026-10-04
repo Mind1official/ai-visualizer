@@ -44,6 +44,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   /* CONTEXT GAUGE -- sits on the right, just above the transcript.
      Its bottom is set from JS so it rides on top of the transcript
      panel however tall that grows. */
+  /* MUSIC MODE: chat, context and plan step aside for the visualizer.
+     Faded, not removed, so the layout (and the orb's centre) holds still. */
+  #transcript-panel,#usage-gauge{transition:opacity 1s ease}
+  body.music #transcript-panel,body.music #usage-gauge,
+  body.music #context-gauge{opacity:0!important;pointer-events:none!important;
+    transition:opacity 1s ease!important}
   #context-gauge{position:fixed;right:18px;z-index:6;cursor:auto;
     width:196px;padding:10px 12px 11px;border-radius:10px;
     font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
@@ -164,7 +170,30 @@ const mags=new Float32Array(32);
 const barMax=new Float32Array(NUM_BARS).fill(1);
 const bandMax=[1,1,1];
 let bassE=0,midE=0,highE=0;
+/* MUSIC MODE (backtalk music.py -> .voice_music -> AV.music/AV.bands):
+   the song drives the starburst instead of Janus's voice. The bus only
+   refreshes ~8x a second, so the 32 bands are eased toward each reading
+   rather than snapped, or the bars would step. She takes the starburst
+   back whenever she is talking or thinking. */
+const musicMags=new Float32Array(32);
+let musicT=0;
+function musicLive(){
+  return AV.music&&AV.state!=="speaking"&&AV.state!=="thinking";
+}
 function spectrum(){
+  if(musicLive()){
+    const b=AV.bands||[];
+    for(let k=0;k<32;k++){
+      const t=b[k]||0;
+      musicMags[k]+=(t-musicMags[k])*(t>musicMags[k]?.55:.18);
+      mags[k]=musicMags[k];
+    }
+    const band=(a,c)=>{let m=0;for(let k=a;k<c;k++)m+=mags[k];return m/(c-a)};
+    bassE=bassE*.6+band(0,6)*.4;
+    midE=midE*.7+band(6,18)*.3;
+    highE=highE*.7+band(18,32)*.3;
+    return;
+  }
   const s=AV.rawSamples;
   if(!s){mags.fill(0);return}
   for(let k=1;k<=32;k++){
@@ -596,14 +625,16 @@ function frame(dt){
   const cxp=W>>1;
   const cyp=(activityPanel.offsetHeight+(H-transcriptPanel.offsetHeight))/2;
   const innerR=Math.min(cxp,cyp)*.42;
-  const maxLen=Math.min(cxp,cyp)*.65;
-  rotation+=.002*dt60;
+  // music mode eases in: longer bars, spin that follows the kick
+  musicT+=((musicLive()?1:0)-musicT)*.05*Math.min(3,dt/16.667);
+  const maxLen=Math.min(cxp,cyp)*(.65+.17*musicT);
+  rotation+=(.002+.010*musicT*bassE)*dt60;
 
   /* state-driven fades: speaking = both off (bars + halo own the motion),
      listening/thinking = working ornaments, idle = idle ornaments */
   const st=AV.state;
   let idleT=0,workT=0;
-  if(st==="speaking"){idleT=0;workT=0}
+  if(st==="speaking"||musicLive()){idleT=0;workT=0}
   else if(st==="listening"||st==="thinking"){idleT=0;workT=1}
   else{idleT=1;workT=0}
   const ease=(cur,tg,up)=>cur+(tg-cur)*(tg>cur?up:.30)*dt60;
@@ -745,6 +776,23 @@ function frame(dt){
 
   if(AV.alert)drawAlert(cxp,cyp,innerR,dt60);
   if(AV.compacting)drawCompacting(cxp,cyp,innerR);
+  document.body.classList.toggle("music",!!AV.music);
+  if(musicT>.02)drawMusicTag();
+}
+
+/* The "MUSIC MODE" tag, bottom centre, pulsing with the kick. It sits in
+   the transcript panel's spot, which music mode fades out (body.music),
+   so it never fights the chat for the same pixels. */
+function drawMusicTag(){
+  ctx.save();
+  const k=Math.min(1,bassE*1.4);
+  ctx.globalAlpha=Math.min(1,musicT)*(.45+.55*k);
+  ctx.font=`600 ${18+k*4|0}px 'SF Mono',Menlo,Consolas,monospace`;
+  ctx.fillStyle="rgb(240,70,110)";
+  ctx.shadowColor="rgba(255,45,90,.9)";ctx.shadowBlur=8+k*22;
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.fillText("M U S I C   M O D E",W/2,H-42);
+  ctx.restore();
 }
 
 /* How much of the bottom edge the transcript panel is covering. Canvas
