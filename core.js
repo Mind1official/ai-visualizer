@@ -397,6 +397,121 @@ const AV = (() => {
   // that wants to ask a question without going through the voice line).
   A.ask = (question) => { A.prompt = String(question || ""); promptUpdate(); };
 
+
+  /* --------------------------- the stage (our fork) ------------------------ */
+  // Cards shown on the face. DOM rather than canvas on purpose: text wrapping,
+  // long bodies, scrolling and images all come free, and no face has to change
+  // its draw loop to gain this. Independent of barehands by design -- the board
+  // is for HANDLING things, the face is for SEEING them.
+  //
+  // Polled once a second, not 8x: a card appearing is a human-scale event, and
+  // the face's frame budget belongs to the animation.
+  let stageWrap = null, stageSig = "", stageHidden = false;
+
+  function stageBuild() {
+    stageWrap = document.createElement("div");
+    stageWrap.style.cssText =
+      "position:fixed;inset:0;z-index:55;pointer-events:none;" +
+      "display:flex;flex-wrap:wrap;align-content:center;justify-content:center;" +
+      "gap:18px;padding:6vh 5vw";
+    document.body.appendChild(stageWrap);
+    // One key to get the face back without clearing the stage: a presented
+    // card can cover a lot of the animation, and wanting to look at the face
+    // is not the same as being done with what is on it.
+    addEventListener("keydown", e => {
+      if (e.key === "s" || e.key === "S") {
+        stageHidden = !stageHidden;
+        stageWrap.style.display = stageHidden ? "none" : "flex";
+      }
+    });
+  }
+
+  function stageCard(c, focused, dimmed) {
+    const el = document.createElement("div");
+    el.style.cssText =
+      "pointer-events:auto;box-sizing:border-box;" +
+      "background:rgba(8,10,12,.93);border:1px solid rgba(182,2,50,.5);" +
+      "border-radius:12px;backdrop-filter:blur(6px);" +
+      "max-height:" + (focused ? "80vh" : "42vh") + ";overflow:auto;" +
+      "width:" + (focused ? "min(900px,78vw)" : "min(380px,42vw)") + ";" +
+      "padding:" + (focused ? "22px 26px" : "14px 16px") + ";" +
+      "box-shadow:0 0 " + (focused ? "60px rgba(182,2,50,.34)"
+                                   : "26px rgba(182,2,50,.16)") + ";" +
+      "opacity:" + (dimmed ? ".32" : "1") + ";transition:opacity .4s";
+
+    if (c.title) {
+      const h = document.createElement("div");
+      h.style.cssText =
+        "font:" + (focused ? "600 20px" : "600 13px") +
+        " 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.12em;" +
+        "text-transform:uppercase;color:#b60232;margin-bottom:10px";
+      h.textContent = c.title;
+      el.appendChild(h);
+    }
+    if (c.src) {
+      const img = document.createElement("img");
+      // Served from the visualizer's own folder, same as every other asset:
+      // the server refuses anything outside it, so a stray path cannot be
+      // used to read the rest of the disk.
+      img.src = c.src.startsWith("http") ? c.src : "stage-media/" + c.src;
+      img.style.cssText =
+        "display:block;width:100%;height:auto;border-radius:8px;" +
+        (c.body || c.title ? "margin-bottom:12px" : "");
+      img.onerror = () => {
+        img.replaceWith(Object.assign(document.createElement("div"), {
+          textContent: "[ missing: " + c.src + " ]",
+          style: "font:12px 'SF Mono',monospace;color:#8a3",
+        }));
+      };
+      el.appendChild(img);
+    }
+    if (c.body) {
+      const b = document.createElement("div");
+      b.style.cssText =
+        "white-space:pre-wrap;color:#dfe7ea;" +
+        "font:" + (focused ? "15px/1.62" : "12px/1.55") +
+        " 'SF Mono',Menlo,Consolas,monospace";
+      b.textContent = c.body;
+      el.appendChild(b);
+    }
+    return el;
+  }
+
+  function stageRender(stage) {
+    const cards = stage.cards || [];
+    const focus = stage.focus || "";
+    // Signature so an unchanged stage costs nothing: rebuilding the DOM every
+    // second would reset the scroll position of anything being read.
+    const sig = JSON.stringify([cards, focus]);
+    if (sig === stageSig) return;
+    stageSig = sig;
+    if (!stageWrap) stageBuild();
+    stageWrap.textContent = "";
+    if (!cards.length) return;
+    const hasFocus = !!focus && cards.some(c => c.id === focus);
+    // The focused card first and alone on its row, the rest dimmed behind it.
+    const ordered = hasFocus
+      ? [cards.find(c => c.id === focus),
+         ...cards.filter(c => c.id !== focus)]
+      : cards;
+    for (const c of ordered) {
+      const focused = hasFocus && c.id === focus;
+      stageWrap.appendChild(stageCard(c, focused, hasFocus && !focused));
+    }
+    A.stage = stage;
+  }
+
+  if (!DEMO) {
+    const pollStage = async () => {
+      try {
+        const r = await fetch("/stage", { cache: "no-store" });
+        stageRender(await r.json());
+      } catch (e) { /* server gone: leave what is on screen */ }
+    };
+    pollStage();
+    setInterval(pollStage, 1000);
+  }
+
   /* ------------------------------ shot harness ----------------------------- */
   // Runs the face's frame() deterministically (a synchronous burst of t ms).
   // A headless browser resizes the window and finishes loading images AFTER

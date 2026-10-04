@@ -245,6 +245,82 @@ def read_bus():
             "prompt": prompt}
 
 
+# --- the stage (our fork) ----------------------------------------------------
+# Cards shown ON THE FACE, deliberately independent of barehands. The board
+# keeps its scene only in memory behind its own server, so mirroring it would
+# mean the webcam and hand tracker had to be running just to read a note. The
+# two serve different jobs: the board is for HANDLING things, the face is for
+# SEEING them.
+#
+# Persisted as one small JSON file so it survives a server restart and can be
+# written directly by the agent when that is simpler than an HTTP call.
+STAGE_FILE = HERE / ".stage.json"
+STAGE_MAX = 12          # more cards than this on one screen is noise
+STAGE_MEDIA = HERE / "stage-media"
+
+
+def read_stage():
+    try:
+        data = json.loads(STAGE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"cards": [], "focus": "", "ts": 0}
+    cards = [c for c in (data.get("cards") or []) if isinstance(c, dict)]
+    return {"cards": cards[:STAGE_MAX],
+            "focus": str(data.get("focus") or ""),
+            "ts": float(data.get("ts") or 0)}
+
+
+def write_stage(stage):
+    stage["ts"] = time.time()
+    try:
+        STAGE_FILE.write_text(json.dumps(stage, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    return stage
+
+
+def stage_action(body):
+    """One action per call, mirroring the verbs board.sh already uses so the
+    agent does not have to learn a second vocabulary.
+
+      present   one thing center stage, everything else dimmed
+      add       another card alongside whatever is up
+      remove    drop one card by id
+      clear     empty the stage
+
+    Returns the new stage. An unknown action is an error rather than a silent
+    no-op: a typo that quietly does nothing is the worst outcome here."""
+    action = str(body.get("a") or body.get("action") or "").lower()
+    stage = read_stage()
+    if action == "clear":
+        return write_stage({"cards": [], "focus": ""})
+    if action == "remove":
+        cid = str(body.get("id") or "")
+        stage["cards"] = [c for c in stage["cards"] if c.get("id") != cid]
+        if stage["focus"] == cid:
+            stage["focus"] = ""
+        return write_stage(stage)
+    if action not in ("present", "add", "add_card"):
+        raise ValueError(f"unknown action {action!r} "
+                         f"(present, add, remove, clear)")
+    card = {
+        "id": str(body.get("id") or f"c{int(time.time() * 1000) % 10**9}"),
+        "title": str(body.get("title") or "")[:160],
+        "body": str(body.get("body") or "")[:6000],
+        "src": str(body.get("src") or "")[:300],
+    }
+    if not (card["title"] or card["body"] or card["src"]):
+        raise ValueError("a card needs a title, a body or a src")
+    # Replace rather than duplicate when the same id comes back: re-presenting
+    # a card is how you update it.
+    stage["cards"] = [c for c in stage["cards"] if c.get("id") != card["id"]]
+    stage["cards"].append(card)
+    stage["cards"] = stage["cards"][-STAGE_MAX:]
+    if action == "present":
+        stage["focus"] = card["id"]
+    return write_stage(stage)
+
+
 def read_context():
     """The context-window fill, or {} when nothing is publishing it.
 
@@ -293,6 +369,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/transcript":
                 self._send(json.dumps({"lines": read_log(".transcript_log")}).encode(),
                            "application/json")
+            elif path == "/stage":
+                self._send(json.dumps(read_stage()).encode(),
+                           "application/json")
             elif path == "/context":
                 self._send(json.dumps(read_context()).encode(),
                            "application/json")
@@ -329,7 +408,11 @@ class Handler(BaseHTTPRequestHandler):
     # only ever travels browser -> voice line. backtalk consumes and truncates
     # it, so this end only ever appends.
     def do_POST(self):
-        if self.path.split("?")[0] != "/say":
+        route = self.path.split("?")[0]
+        if route == "/stage":
+            self._post_stage()
+            return
+        if route != "/say":
             self._send(b"not found", "text/plain", 404)
             return
         try:
@@ -358,6 +441,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send(json.dumps({"ok": True}).encode(), "application/json")
         except ConnectionError:
             pass
+        except Exception as e:
+            try:
+                self._send(json.dumps({"ok": False, "error": str(e)}).encode(),
+                           "application/json", 500)
+            except ConnectionError:
+                pass
+
+    def _post_stage(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > 262144:
+                self._send(json.dumps({"ok": False, "error": "empty"}).encode(),
+                           "application/json", 400)
+                return
+            body = json.loads(self.rfile.read(n).decode("utf-8", "replace"))
+            stage = stage_action(body)
+            self._send(json.dumps({"ok": True, "stage": stage}).encode(),
+                       "application/json")
+        except ConnectionError:
+            pass
+        except ValueError as e:
+            try:
+                self._send(json.dumps({"ok": False, "error": str(e)}).encode(),
+                           "application/json", 400)
+            except ConnectionError:
+                pass
         except Exception as e:
             try:
                 self._send(json.dumps({"ok": False, "error": str(e)}).encode(),
