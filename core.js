@@ -152,10 +152,17 @@ const AV = (() => {
     // True while Claude Code folds the context down (PreCompact hook).
     // A face that wants to show it reads AV.compacting; the rest ignore it.
     A.compacting = !!raw.compacting;
+    A.music = !!raw.music;
+    A.bands = raw.bands || [];
     // Empty unless the voice line was told to publish usage. A face that
     // wants to draw it reads AV.rateLimits; every other face ignores it.
     A.rateLimits = raw.rate_limits || {};
     A.level = raw.level || 0;
+    // OUR FORK: non-empty = the agent is waiting on a typed answer, and the
+    // string is the question. promptUpdate() owns the input box; a face can
+    // also read AV.prompt if it wants to react in its own visuals.
+    A.prompt = raw.prompt || "";
+    promptUpdate();
 
     // adaptive envelope: normalize against a decaying peak, then ease
     // (attack 50ms, release 350ms) — motion code rides AV.env
@@ -276,6 +283,119 @@ const AV = (() => {
       stopSound();
     }
   }
+
+
+  /* ------------------------- typed input (our fork) ------------------------ */
+  // An input box that exists only while the agent is actually asking for
+  // something. No persistent chat bar: the faces are a performance surface,
+  // and a text field parked on screen forever would show on stream and in
+  // every OBS source for the 99% of the time nothing is being asked.
+  //
+  // The box is built on first need rather than at init, so a face that never
+  // sees a prompt never gets the DOM at all.
+  let promptBox = null, promptLabel = null, promptInput = null;
+  let promptShown = "", promptSending = false;
+
+  function promptBuild() {
+    promptBox = document.createElement("div");
+    promptBox.style.cssText =
+      "position:fixed;left:50%;bottom:calc(72px + var(--av-bottom-inset,0px));" +
+      "transform:translateX(-50%) translateY(14px);z-index:60;" +
+      "min-width:min(620px,86vw);max-width:86vw;padding:14px 16px 12px;" +
+      "background:rgba(8,10,12,.92);border:1px solid rgba(182,2,50,.55);" +
+      "border-radius:10px;box-shadow:0 0 42px rgba(182,2,50,.28);" +
+      "backdrop-filter:blur(6px);opacity:0;pointer-events:none;" +
+      "transition:opacity .25s,transform .25s";
+
+    promptLabel = document.createElement("div");
+    promptLabel.style.cssText =
+      "font:12px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.18em;" +
+      "text-transform:uppercase;color:#b60232;margin-bottom:9px;" +
+      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    promptBox.appendChild(promptLabel);
+
+    promptInput = document.createElement("input");
+    promptInput.type = "text";
+    promptInput.autocomplete = "off";
+    promptInput.spellcheck = false;
+    promptInput.style.cssText =
+      "width:100%;box-sizing:border-box;background:transparent;border:0;" +
+      "border-bottom:1px solid rgba(182,2,50,.35);outline:none;" +
+      "color:#e8eef0;font:17px 'SF Mono',Menlo,Consolas,monospace;" +
+      "padding:4px 2px 7px";
+    promptInput.addEventListener("keydown", e => {
+      // Stop every key reaching the page: the faces bind single letters
+      // (F for fullscreen, Space for the board flythrough), so typing a
+      // sentence into an unguarded field would fire them mid-word.
+      e.stopPropagation();
+      if (e.key === "Enter") promptSend();
+      else if (e.key === "Escape") promptHide();
+    });
+    promptBox.appendChild(promptInput);
+
+    const hint = document.createElement("div");
+    hint.style.cssText =
+      "margin-top:8px;font:10px 'SF Mono',Menlo,Consolas,monospace;" +
+      "letter-spacing:.16em;color:#5a6a72";
+    hint.textContent = "ENTER TO SEND   ESC TO DISMISS";
+    promptBox.appendChild(hint);
+
+    document.body.appendChild(promptBox);
+  }
+
+  function promptHide() {
+    promptShown = "";
+    if (!promptBox) return;
+    promptBox.style.opacity = "0";
+    promptBox.style.pointerEvents = "none";
+    promptBox.style.transform = "translateX(-50%) translateY(14px)";
+    promptInput.blur();
+  }
+
+  async function promptSend() {
+    const text = promptInput.value.trim();
+    if (!text || promptSending) return;
+    promptSending = true;
+    const prev = promptInput.value;
+    promptInput.value = "";
+    try {
+      const r = await fetch("/say", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error("rejected");
+      promptHide();
+    } catch (e) {
+      // Put it back rather than swallow it. Losing a typed sentence to a
+      // dropped request is the one failure here that actually costs the
+      // person something.
+      promptInput.value = prev;
+      promptLabel.textContent = "COULD NOT SEND -- PRESS ENTER TO RETRY";
+    } finally {
+      promptSending = false;
+    }
+  }
+
+  function promptUpdate() {
+    const want = A.prompt || "";
+    if (!want) { if (promptShown) promptHide(); return; }
+    if (want === promptShown) return;
+    if (!promptBox) promptBuild();
+    promptShown = want;
+    promptLabel.textContent = want;
+    promptBox.style.opacity = "1";
+    promptBox.style.pointerEvents = "auto";
+    promptBox.style.transform = "translateX(-50%) translateY(0)";
+    // Focus is the point: the person should be able to just type. Deferred a
+    // frame because an element that was display-none a moment ago cannot
+    // take focus reliably in Chrome.
+    requestAnimationFrame(() => promptInput.focus());
+  }
+
+  // A face can raise its own prompt (used by the shot harness and anything
+  // that wants to ask a question without going through the voice line).
+  A.ask = (question) => { A.prompt = String(question || ""); promptUpdate(); };
 
   /* ------------------------------ shot harness ----------------------------- */
   // Runs the face's frame() deterministically (a synchronous burst of t ms).

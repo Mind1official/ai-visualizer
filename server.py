@@ -108,7 +108,7 @@ NO_OPEN = "--no-open" in sys.argv
 if "--mock" in sys.argv:
     i = sys.argv.index("--mock")
     MOCK = sys.argv[i + 1] if len(sys.argv) > i + 1 else "speaking"
-    if MOCK not in STATES:
+    if MOCK not in STATES and MOCK != "music":
         MOCK = "speaking"
 PORT = int(CFG.get("port", 8790))
 if "--port" in sys.argv:
@@ -144,15 +144,33 @@ def mock_bus():
             * 9000.0 * (0.35 + 0.65 * abs(math.sin(t * 2.6)))
             for i in range(64)
         ]
-    return {"state": MOCK, "level": level, "samples": samples,
+    music = MOCK == "music"
+    bands = []
+    if music:
+        # a fake 124 bpm kick plus drifting mids and hats, so the
+        # visualizer can be looked at without playing anything
+        kick = max(0.0, math.cos((t * 124 / 60 % 1) * math.pi)) ** 6
+        bands = [min(1.0, max(0.0,
+                     (kick * (1 - i / 10) if i < 10 else 0)
+                     + 0.35 * abs(math.sin(t * 1.3 + i * 0.4)) * (1 - i / 48)
+                     + (0.25 * abs(math.sin(t * 7 + i)) if i > 22 else 0)))
+                 for i in range(32)]
+    return {"state": "idle" if music else MOCK, "level": level,
+            "samples": samples,
+            # so the input box can be looked at without a voice line
+            "prompt": "Type something and press Enter" if MOCK == "thinking" else "",
             "alert": False, "loading": MOCK == "thinking",
             "compacting": MOCK == "compacting",
+            "music": music, "bands": bands,
             # Faked so the usage readout can be looked at without
             # spending a real session to make it appear.
             "rate_limits": {
                 "five_hour": {"utilization": 0.34, "resets_at": t + 9200},
                 "seven_day": {"utilization": 0.61, "resets_at": t + 288000},
             }}
+
+
+MUSIC_STALE_S = 3
 
 
 def read_bus():
@@ -201,9 +219,30 @@ def read_bus():
         rate_limits = json.loads((BUS / ".voice_rate_limits").read_text())
     except (OSError, ValueError):
         pass
+    # Music mode (backtalk music.py): {ts, on, bands}. Refreshed ~8x a
+    # second while music plays, so a stale reading means the voice line
+    # stopped publishing and the visualizer must come down.
+    music, bands = False, []
+    try:
+        m = json.loads((BUS / ".voice_music").read_text())
+        if m.get("on") and time.time() - float(m.get("ts", 0)) < MUSIC_STALE_S:
+            music = True
+            bands = [float(b) for b in (m.get("bands") or [])[:64]]
+    except (OSError, ValueError, TypeError):
+        pass
+    # OUR FORK: non-empty .voice_prompt means the agent is waiting on a typed
+    # answer, and its contents are the question. Absent or empty = no input
+    # box at all, which is the normal case -- the face stays clean until there
+    # is actually something to answer.
+    prompt = ""
+    try:
+        prompt = (BUS / ".voice_prompt").read_text(encoding="utf-8").strip()[:200]
+    except OSError:
+        prompt = ""
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
-            "compacting": compacting}
+            "compacting": compacting, "music": music, "bands": bands,
+            "prompt": prompt}
 
 
 def read_context():
@@ -282,6 +321,48 @@ class Handler(BaseHTTPRequestHandler):
             except ConnectionError:
                 # A real error AND the client already gone. There is nobody
                 # left to tell; saying so twice helps no one.
+                pass
+
+    # OUR FORK: the one write this server performs. Everything else here is
+    # read-only on the bus by design, and that stays true of the .voice_*
+    # files the faces READ -- .voice_typed is a separate inbound channel that
+    # only ever travels browser -> voice line. backtalk consumes and truncates
+    # it, so this end only ever appends.
+    def do_POST(self):
+        if self.path.split("?")[0] != "/say":
+            self._send(b"not found", "text/plain", 404)
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > 8192:                 # a typed line, not a payload
+                self._send(json.dumps({"ok": False, "error": "empty"}).encode(),
+                           "application/json", 400)
+                return
+            body = json.loads(self.rfile.read(n).decode("utf-8", "replace"))
+            text = " ".join(str(body.get("text") or "").split())[:2000]
+            if not text:
+                self._send(json.dumps({"ok": False, "error": "empty"}).encode(),
+                           "application/json", 400)
+                return
+            # Append, never overwrite: two tabs open at once must not be able
+            # to drop each other's line.
+            with open(BUS / ".voice_typed", "a", encoding="utf-8") as f:
+                f.write(text + chr(10))
+            # Clearing the prompt here as well as in backtalk's reader is
+            # belt-and-braces: the box vanishes on submit even if the voice
+            # line is not running to consume the line.
+            try:
+                (BUS / ".voice_prompt").unlink()
+            except OSError:
+                pass
+            self._send(json.dumps({"ok": True}).encode(), "application/json")
+        except ConnectionError:
+            pass
+        except Exception as e:
+            try:
+                self._send(json.dumps({"ok": False, "error": str(e)}).encode(),
+                           "application/json", 500)
+            except ConnectionError:
                 pass
 
     def _static(self, path):
