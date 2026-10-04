@@ -512,6 +512,104 @@ const AV = (() => {
     setInterval(pollStage, 1000);
   }
 
+
+  /* ------------------------- the panels (our fork) ------------------------- */
+  // Two standing lists in the top-right: what is being worked on RIGHT NOW
+  // (often more than one thread) and the to-do list. Unlike the stage these
+  // are meant to persist and be glanced at, so they are never auto-cleared.
+  //
+  // Top offset reads --av-top-inset, the mirror of the --av-bottom-inset
+  // convention a face already sets: the radial face runs a full-width activity
+  // strip along the top edge, and without this the lists would sit under it.
+  let panelWrap = null, panelSig = "", panelsHidden = false;
+
+  const PANEL_TITLES = { now: "WORKING ON NOW", todo: "TO DO" };
+
+  function panelsBuild() {
+    panelWrap = document.createElement("div");
+    panelWrap.style.cssText =
+      "position:fixed;right:18px;z-index:54;pointer-events:none;" +
+      "top:calc(14px + var(--av-top-inset,0px));" +
+      "width:min(300px,34vw);display:flex;flex-direction:column;gap:12px";
+    document.body.appendChild(panelWrap);
+    addEventListener("keydown", e => {
+      if (e.key === "l" || e.key === "L") {
+        panelsHidden = !panelsHidden;
+        panelWrap.style.display = panelsHidden ? "none" : "flex";
+      }
+    });
+  }
+
+  function panelCard(key, items) {
+    const el = document.createElement("div");
+    el.style.cssText =
+      "box-sizing:border-box;padding:10px 13px 11px;border-radius:10px;" +
+      "background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));" +
+      "border:1px solid rgba(182,2,50,.55);" +
+      "box-shadow:0 0 22px rgba(182,2,50,.22)," +
+      "inset 0 0 18px rgba(182,2,50,.10);backdrop-filter:blur(3px)";
+
+    const h = document.createElement("div");
+    h.style.cssText =
+      "font:10px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.2em;" +
+      "color:#b60232;margin-bottom:8px;display:flex;justify-content:space-between";
+    const open = items.filter(i => !i.done).length;
+    h.innerHTML = "";
+    h.appendChild(Object.assign(document.createElement("span"),
+      { textContent: PANEL_TITLES[key] || key.toUpperCase() }));
+    // The count is the open items, not the total: a list of ten with nine
+    // ticked off should read as one thing left, not ten.
+    h.appendChild(Object.assign(document.createElement("span"),
+      { textContent: String(open), style: "opacity:.6" }));
+    el.appendChild(h);
+
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "font:11.5px/1.5 'SF Mono',Menlo,Consolas,monospace;" +
+        "display:flex;gap:7px;align-items:baseline;" +
+        "padding:2px 0;color:" + (it.done ? "#6c7a80" : "rgb(255,190,205)") +
+        ";" + (it.done ? "text-decoration:line-through;opacity:.75" : "");
+      row.appendChild(Object.assign(document.createElement("span"), {
+        textContent: it.done ? "\u2713" : "\u203a",
+        style: "color:#b60232;flex:0 0 auto",
+      }));
+      row.appendChild(Object.assign(document.createElement("span"), {
+        textContent: it.text,
+        style: "white-space:pre-wrap;word-break:break-word",
+      }));
+      el.appendChild(row);
+    }
+    return el;
+  }
+
+  function panelsRender(data) {
+    // Signature guard, same reason as the stage: rebuilding every poll would
+    // fight anything the person is mid-scroll on.
+    const sig = JSON.stringify([data.now || [], data.todo || []]);
+    if (sig === panelSig) return;
+    panelSig = sig;
+    if (!panelWrap) panelsBuild();
+    panelWrap.textContent = "";
+    for (const key of ["now", "todo"]) {
+      const items = data[key] || [];
+      if (!items.length) continue;      // an empty list draws nothing at all
+      panelWrap.appendChild(panelCard(key, items));
+    }
+    A.panels = data;
+  }
+
+  if (!DEMO) {
+    const pollPanels = async () => {
+      try {
+        const r = await fetch("/panels", { cache: "no-store" });
+        panelsRender(await r.json());
+      } catch (e) { /* server gone: leave what is on screen */ }
+    };
+    pollPanels();
+    setInterval(pollPanels, 1500);
+  }
+
   /* ------------------------------ shot harness ----------------------------- */
   // Runs the face's frame() deterministically (a synchronous burst of t ms).
   // A headless browser resizes the window and finishes loading images AFTER

@@ -1,0 +1,42 @@
+{
+ "now": [
+  {
+   "id": "i1448038920",
+   "text": "Face stage + typed input (ai-visualizer fork)",
+   "done": false
+  },
+  {
+   "id": "i1448038921",
+   "text": "Workstation stability watch - Fast Startup off",
+   "done": false
+  }
+ ],
+ "todo": [
+  {
+   "id": "i1448040180",
+   "text": "Bounce the voice line to arm typed input",
+   "done": false
+  },
+  {
+   "id": "i1448040191",
+   "text": "Amber tests her Gmail line when home",
+   "done": false
+  },
+  {
+   "id": "i1448040192",
+   "text": "Two test clips on the channel - keep or delete",
+   "done": false
+  },
+  {
+   "id": "i1448040193",
+   "text": "v1key -> v1key-next: retire it?",
+   "done": false
+  },
+  {
+   "id": "i1448040194",
+   "text": "Janus launcher has never been double-clicked",
+   "done": false
+  }
+ ],
+ "ts": 1791144809.9678211
+}

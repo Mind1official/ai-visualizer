@@ -1073,6 +1073,12 @@ addEventListener("resize",ugPlace);
 function publishInset(){
   document.documentElement.style.setProperty(
     "--av-bottom-inset",chromeInset()+"px");
+  /* And the top edge, for the same reason: core.js parks the NOW / TO DO
+     lists in the top-right, and the activity strip runs the full width of
+     the top. Its height changes with its content, so this is republished
+     rather than measured once. */
+  document.documentElement.style.setProperty(
+    "--av-top-inset",(activityPanel.offsetHeight||0)+"px");
 }
 publishInset();
 setInterval(publishInset,1000);

@@ -321,6 +321,105 @@ def stage_action(body):
     return write_stage(stage)
 
 
+# --- the panels (our fork) ---------------------------------------------------
+# Two standing lists in the top-right of the face: what we are working on RIGHT
+# NOW (often more than one thread) and the to-do list. Distinct from the stage
+# on purpose -- the stage is transient and gets cleared, these persist and are
+# meant to be glanced at.
+#
+# Separate file from the stage so clearing the stage can never take the lists
+# with it, which would be the obvious accident.
+PANELS_FILE = HERE / ".panels.json"
+PANEL_KEYS = ("now", "todo")
+PANEL_MAX = 12          # a glanceable list, not a backlog viewer
+
+
+def read_panels():
+    try:
+        data = json.loads(PANELS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    out = {}
+    for k in PANEL_KEYS:
+        items = []
+        for it in (data.get(k) or [])[:PANEL_MAX]:
+            if isinstance(it, dict) and it.get("text"):
+                items.append({"id": str(it.get("id") or ""),
+                              "text": str(it["text"])[:200],
+                              "done": bool(it.get("done"))})
+        out[k] = items
+    out["ts"] = float(data.get("ts") or 0)
+    return out
+
+
+def write_panels(panels):
+    panels["ts"] = time.time()
+    try:
+        PANELS_FILE.write_text(json.dumps(panels, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    return panels
+
+
+def _new_id():
+    return f"i{int(time.time() * 1000) % 10**9}"
+
+
+def panels_action(body):
+    """One action per call.
+
+      set     replace a whole list from an array of strings (the common case:
+              the lists are mirrored from Active Priorities, so rewriting is
+              more honest than patching item by item)
+      add     append one item
+      done    toggle an item's struck-through state by id
+      remove  drop an item by id
+      clear   empty one list
+
+    Which list is `p`: "now" or "todo". An unknown list or action is an error,
+    never a silent no-op."""
+    panel = str(body.get("p") or body.get("panel") or "").lower()
+    if panel not in PANEL_KEYS:
+        raise ValueError(f"unknown list {panel!r} (now, todo)")
+    action = str(body.get("a") or body.get("action") or "").lower()
+    panels = read_panels()
+    items = panels[panel]
+
+    if action == "clear":
+        panels[panel] = []
+    elif action == "set":
+        raw = body.get("items")
+        if not isinstance(raw, list):
+            raise ValueError("set needs \"items\": [\"...\", \"...\"]")
+        panels[panel] = [
+            {"id": _new_id() + str(i), "text": str(t)[:200], "done": False}
+            for i, t in enumerate(raw) if str(t).strip()
+        ][:PANEL_MAX]
+    elif action == "add":
+        text = str(body.get("text") or "").strip()[:200]
+        if not text:
+            raise ValueError("add needs \"text\"")
+        items.append({"id": _new_id(), "text": text, "done": False})
+        panels[panel] = items[-PANEL_MAX:]
+    elif action in ("done", "remove"):
+        cid = str(body.get("id") or "")
+        if action == "remove":
+            panels[panel] = [i for i in items if i["id"] != cid]
+        else:
+            hit = False
+            for i in items:
+                if i["id"] == cid:
+                    i["done"] = not i["done"]
+                    hit = True
+            if not hit:
+                raise ValueError(f"no item with id {cid!r}")
+            panels[panel] = items
+    else:
+        raise ValueError(f"unknown action {action!r} "
+                         f"(set, add, done, remove, clear)")
+    return write_panels(panels)
+
+
 def read_context():
     """The context-window fill, or {} when nothing is publishing it.
 
@@ -369,6 +468,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/transcript":
                 self._send(json.dumps({"lines": read_log(".transcript_log")}).encode(),
                            "application/json")
+            elif path == "/panels":
+                self._send(json.dumps(read_panels()).encode(),
+                           "application/json")
             elif path == "/stage":
                 self._send(json.dumps(read_stage()).encode(),
                            "application/json")
@@ -410,7 +512,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         route = self.path.split("?")[0]
         if route == "/stage":
-            self._post_stage()
+            self._post_json(stage_action, "stage")
+            return
+        if route == "/panels":
+            self._post_json(panels_action, "panels")
             return
         if route != "/say":
             self._send(b"not found", "text/plain", 404)
@@ -448,7 +553,9 @@ class Handler(BaseHTTPRequestHandler):
             except ConnectionError:
                 pass
 
-    def _post_stage(self):
+    # One body for every JSON write route: the refusal and error shapes stay
+    # identical across them, which is the whole reason to share it.
+    def _post_json(self, fn, key):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n <= 0 or n > 262144:
@@ -456,8 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json", 400)
                 return
             body = json.loads(self.rfile.read(n).decode("utf-8", "replace"))
-            stage = stage_action(body)
-            self._send(json.dumps({"ok": True, "stage": stage}).encode(),
+            self._send(json.dumps({"ok": True, key: fn(body)}).encode(),
                        "application/json")
         except ConnectionError:
             pass
