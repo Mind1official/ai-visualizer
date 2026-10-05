@@ -163,6 +163,8 @@ const AV = (() => {
     // also read AV.prompt if it wants to react in its own visuals.
     A.prompt = raw.prompt || "";
     promptUpdate();
+    A.remote = !!raw.remote;
+    reclaimUpdate();
 
     // adaptive envelope: normalize against a decaying peak, then ease
     // (attack 50ms, release 350ms) — motion code rides AV.env
@@ -396,6 +398,76 @@ const AV = (() => {
   // A face can raise its own prompt (used by the shot harness and anything
   // that wants to ask a question without going through the voice line).
   A.ask = (question) => { A.prompt = String(question || ""); promptUpdate(); };
+
+
+  /* ------------------- take back the line (our fork) ---------------------- */
+  // While a phone holds the voice line, the PC's open mic is paused -- so if
+  // the remote end gets stuck (a closed window, a lost login) there is no way
+  // to speak at the desk and ask for the line back. This button is that way
+  // out, and it only exists while a remote session is actually live, so it
+  // never shows on stream the rest of the time.
+  //
+  // It sends a phrase down /say, the same path as the typed box, rather than
+  // inventing a second control channel: the voice console already owns what
+  // "take back the line" means, and one place deciding is the whole point.
+  let reclaimBtn = null, reclaimBusy = false;
+
+  function reclaimBuild() {
+    reclaimBtn = document.createElement("button");
+    reclaimBtn.textContent = "TAKE BACK THE LINE";
+    reclaimBtn.style.cssText =
+      "position:fixed;left:50%;bottom:calc(20px + var(--av-bottom-inset,0px));" +
+      "transform:translateX(-50%);z-index:61;cursor:pointer;" +
+      "padding:11px 20px;background:rgba(8,10,12,.92);" +
+      "border:1px solid rgba(182,2,50,.75);border-radius:999px;" +
+      "box-shadow:0 0 34px rgba(182,2,50,.3);backdrop-filter:blur(6px);" +
+      "color:#e8eef0;font:12px 'SF Mono',Menlo,Consolas,monospace;" +
+      "letter-spacing:.18em;opacity:0;pointer-events:none;" +
+      "transition:opacity .25s";
+    reclaimBtn.addEventListener("click", reclaimSend);
+    // The faces bind single letters, and a focused button would swallow a
+    // Space or fire again on Enter. Click only.
+    reclaimBtn.addEventListener("keydown", e => e.preventDefault());
+    document.body.appendChild(reclaimBtn);
+  }
+
+  async function reclaimSend() {
+    if (reclaimBusy) return;
+    reclaimBusy = true;
+    reclaimBtn.textContent = "TAKING IT BACK...";
+    try {
+      const r = await fetch("/say", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "take back the line" }),
+      });
+      if (!r.ok) throw new Error("rejected");
+      // Do NOT hide it here. The button is driven by .voice_remote, so it
+      // disappears when the session has ACTUALLY ended -- saying so before
+      // it is true is exactly the lie worth avoiding on an escape hatch.
+      reclaimBtn.textContent = "SENT";
+    } catch (e) {
+      reclaimBtn.textContent = "COULD NOT SEND -- TAP AGAIN";
+    } finally {
+      reclaimBusy = false;
+      setTimeout(() => {
+        if (!reclaimBusy) reclaimBtn.textContent = "TAKE BACK THE LINE";
+      }, 2500);
+    }
+  }
+
+  function reclaimUpdate() {
+    if (!A.remote) {
+      if (reclaimBtn) {
+        reclaimBtn.style.opacity = "0";
+        reclaimBtn.style.pointerEvents = "none";
+      }
+      return;
+    }
+    if (!reclaimBtn) reclaimBuild();
+    reclaimBtn.style.opacity = "1";
+    reclaimBtn.style.pointerEvents = "auto";
+  }
 
 
   /* --------------------------- the stage (our fork) ------------------------ */

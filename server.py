@@ -239,10 +239,15 @@ def read_bus():
         prompt = (BUS / ".voice_prompt").read_text(encoding="utf-8").strip()[:200]
     except OSError:
         prompt = ""
+    # OUR FORK: .voice_remote exists while a phone holds the floor. The face
+    # shows a TAKE BACK THE LINE button on it, because that is the only
+    # escape hatch left at the desk -- the local mic is paused for the whole
+    # time a remote session is live.
+    remote = (BUS / ".voice_remote").exists()
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
-            "prompt": prompt}
+            "prompt": prompt, "remote": remote}
 
 
 # --- the stage (our fork) ----------------------------------------------------
