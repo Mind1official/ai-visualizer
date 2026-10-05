@@ -439,23 +439,33 @@ const AV = (() => {
     });
   }
 
-  function stageCard(c, focused, dimmed) {
+  // NOTHING ON THE FACE IS EVER DIMMED. Dimming is a focus cue borrowed from
+  // the barehands board, where the user can reach out and grab a card to
+  // bring it forward. The face has no hands: a dimmed card there is just
+  // permanently unreadable, with no way back. (Mind, 2026-10-04.)
+  //
+  // So `present` still means "first and biggest", but every card stays at
+  // full opacity, and a set of them is sized to fit the screen without
+  // scrolling -- half-dimmed and half off-screen is worse than not showing
+  // it at all.
+  function stageCard(c, focused, peers, ts) {
     const el = document.createElement("div");
     el.style.cssText =
       "pointer-events:auto;box-sizing:border-box;" +
       "background:rgba(8,10,12,.93);border:1px solid rgba(182,2,50,.5);" +
       "border-radius:12px;backdrop-filter:blur(6px);" +
-      "max-height:" + (focused ? "80vh" : "42vh") + ";overflow:auto;" +
-      "width:" + (focused ? "min(900px,78vw)" : "min(380px,42vw)") + ";" +
-      "padding:" + (focused ? "22px 26px" : "14px 16px") + ";" +
+      "max-height:80vh;overflow:" + (peers > 1 ? "hidden" : "auto") + ";" +
+      "width:" + (peers > 1 ? "min(900px," + (86 / peers).toFixed(1) + "vw)"
+                            : "min(900px,78vw)") + ";" +
+      "padding:22px 26px;" +
       "box-shadow:0 0 " + (focused ? "60px rgba(182,2,50,.34)"
                                    : "26px rgba(182,2,50,.16)") + ";" +
-      "opacity:" + (dimmed ? ".32" : "1") + ";transition:opacity .4s";
+      "opacity:1";
 
     if (c.title) {
       const h = document.createElement("div");
       h.style.cssText =
-        "font:" + (focused ? "600 20px" : "600 13px") +
+        "font:600 20px" +
         " 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.12em;" +
         "text-transform:uppercase;color:#b60232;margin-bottom:10px";
       h.textContent = c.title;
@@ -466,9 +476,25 @@ const AV = (() => {
       // Served from the visualizer's own folder, same as every other asset:
       // the server refuses anything outside it, so a stray path cannot be
       // used to read the rest of the disk.
-      img.src = c.src.startsWith("http") ? c.src : "stage-media/" + c.src;
+      //
+      // Resolved against ROOT, not the page. A face lives at
+      // faces/<name>/index.html, so a bare relative path looked for the
+      // image inside THAT folder and every image card rendered as
+      // "[ missing ]" while the server was serving the file perfectly.
+      //
+      // ?v=<stage timestamp> so RESTAGING THE SAME FILENAME actually
+      // refetches. Regenerating a card and putting it up again under the
+      // same name showed the browser's cached copy forever, which looks
+      // exactly like the render failing. (Mind caught it, 2026-10-04.)
+      img.src = c.src.startsWith("http") ? c.src
+                                         : new URL("stage-media/" + c.src, ROOT).href
+                                           + "?v=" + (ts || 0);
       img.style.cssText =
         "display:block;width:100%;height:auto;border-radius:8px;" +
+        // Fit the card, never overflow it: a 9:16 story card is taller than
+        // the screen at full width.
+        "max-height:" + (peers > 1 ? "62vh" : "70vh") +
+        ";object-fit:contain;" +
         (c.body || c.title ? "margin-bottom:12px" : "");
       img.onerror = () => {
         img.replaceWith(Object.assign(document.createElement("div"), {
@@ -495,21 +521,25 @@ const AV = (() => {
     const focus = stage.focus || "";
     // Signature so an unchanged stage costs nothing: rebuilding the DOM every
     // second would reset the scroll position of anything being read.
-    const sig = JSON.stringify([cards, focus]);
+    // ts is in the signature: a restage of identical cards still bumps it,
+    // which is the only way a re-rendered image under the same filename gets
+    // picked up.
+    const sig = JSON.stringify([cards, focus, stage.ts]);
     if (sig === stageSig) return;
     stageSig = sig;
     if (!stageWrap) stageBuild();
     stageWrap.textContent = "";
     if (!cards.length) return;
     const hasFocus = !!focus && cards.some(c => c.id === focus);
-    // The focused card first and alone on its row, the rest dimmed behind it.
+    // The focused card comes first and sets the order; none are dimmed.
     const ordered = hasFocus
       ? [cards.find(c => c.id === focus),
          ...cards.filter(c => c.id !== focus)]
       : cards;
     for (const c of ordered) {
       const focused = hasFocus && c.id === focus;
-      stageWrap.appendChild(stageCard(c, focused, hasFocus && !focused));
+      stageWrap.appendChild(stageCard(c, focused, ordered.length,
+                                     stage.ts));
     }
     A.stage = stage;
   }
