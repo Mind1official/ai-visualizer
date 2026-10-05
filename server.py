@@ -83,6 +83,10 @@ DEFAULTS = {
     "port": 8790,
     "bus_dir": "",          # where the .voice_* files live ("" = here)
     "thinking_sound": True, # play assets/thinking.wav while thinking
+    # OUR FORK: poll the Clip Desk for stream vitals (bitrate, dropped
+    # frames) and hand them to the face. "" disables it entirely.
+    "clip_desk": "http://127.0.0.1:8796",
+    "vitals_poll_s": 5,
 }
 
 
@@ -172,6 +176,67 @@ def mock_bus():
 
 MUSIC_STALE_S = 3
 
+# --- stream vitals (our fork) -------------------------------------------
+# Polled on a BACKGROUND THREAD, never inside read_bus(). read_bus runs on
+# every /state request at 8 Hz; a blocking HTTP call in there would stall
+# the whole face the moment the Clip Desk got slow or went away, which is
+# precisely when a dashboard must not freeze.
+#
+# The cache is the only thing /state reads, and a reading older than
+# VITALS_STALE_S is treated as absent -- so a dead poller shows NOTHING
+# rather than a number frozen at whatever the stream was doing minutes
+# ago. A stale vitals card is worse than no card, because it is believed.
+VITALS_STALE_S = 25
+_VITALS = {"ts": 0.0, "data": None}
+
+
+def _vitals_poller():
+    url = (CFG.get("clip_desk") or "").rstrip("/")
+    if not url:
+        return
+    url += "/health"
+    every = max(2, int(CFG.get("vitals_poll_s") or 5))
+    quiet = False               # log a failure once, not every 5 seconds
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=4) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            _VITALS["data"] = d
+            _VITALS["ts"] = time.time()
+            quiet = False
+        except Exception as e:
+            # Leave the last reading alone; staleness alone decides
+            # whether the face still shows it.
+            if not quiet:
+                print(f"[vitals] Clip Desk not answering ({e}) -- will keep trying quietly")
+                quiet = True
+        time.sleep(every)
+
+
+def read_vitals():
+    """The cached vitals, or None if there is nothing trustworthy."""
+    d = _VITALS["data"]
+    if not d or time.time() - _VITALS["ts"] > VITALS_STALE_S:
+        return None
+    # Only worth putting on screen when OBS is actually streaming. An
+    # "offline" or "unknown" verdict is not news; it is the normal state
+    # for most of the day.
+    if d.get("verdict") in (None, "offline", "unknown"):
+        return None
+    return {
+        "verdict": d.get("verdict"),
+        "summary": d.get("summary"),
+        "kbps": d.get("bitrateKbps"),
+        "fps": d.get("fps"),
+        "cpu": d.get("cpuPct"),
+        "congestion": d.get("congestionPct"),
+        "encoderPct": (d.get("encoder") or {}).get("pct"),
+        "renderPct": (d.get("render") or {}).get("pct"),
+        "encoderNow": (d.get("encoder") or {}).get("lastSecond"),
+        "renderNow": (d.get("render") or {}).get("lastSecond"),
+        "uptimeSec": d.get("uptimeSec"),
+    }
+
 
 def read_bus():
     if MOCK:
@@ -247,7 +312,7 @@ def read_bus():
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
-            "prompt": prompt, "remote": remote}
+            "prompt": prompt, "remote": remote, "vitals": read_vitals()}
 
 
 # --- the stage (our fork) ----------------------------------------------------
@@ -647,6 +712,8 @@ if __name__ == "__main__":
     # window closed. The end-user symptom was "I can hear my agent but the
     # face never shows up", with the face running perfectly the entire time.
     try:
+        if CFG.get("clip_desk"):
+            threading.Thread(target=_vitals_poller, daemon=True).start()
         srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     except OSError as e:
         if e.errno not in (errno.EADDRINUSE, errno.EACCES):

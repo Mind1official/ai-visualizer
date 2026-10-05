@@ -165,6 +165,8 @@ const AV = (() => {
     promptUpdate();
     A.remote = !!raw.remote;
     reclaimUpdate();
+    A.vitals = raw.vitals || null;
+    vitalsUpdate();
 
     // adaptive envelope: normalize against a decaying peak, then ease
     // (attack 50ms, release 350ms) — motion code rides AV.env
@@ -398,6 +400,97 @@ const AV = (() => {
   // A face can raise its own prompt (used by the shot harness and anything
   // that wants to ask a question without going through the voice line).
   A.ask = (question) => { A.prompt = String(question || ""); promptUpdate(); };
+
+
+  /* ---------------------- stream vitals (our fork) ------------------------ */
+  // Bitrate and dropped frames while live. This is the half of "how is the
+  // stream doing" that no platform dashboard shows: Twitch reports a healthy
+  // viewer count while the encoder quietly drops a tenth of its frames.
+  //
+  // It exists ONLY while OBS is actually streaming -- the server sends null
+  // for an offline or unreachable verdict, so the card is absent the rest of
+  // the day rather than parked on screen saying "offline".
+  //
+  // Mind confirmed 2026-10-05 that it appearing on stream is fine: the
+  // community is used to watching him troubleshoot. So the V key is a
+  // convenience, not a safety measure.
+  let vitalsBox = null, vitalsHidden = false, vitalsSig = "";
+
+  const VITALS_COLOR = {
+    good: ["rgba(0,255,170,.55)", "#8affd9"],
+    warn: ["rgba(255,196,0,.65)", "#ffd770"],
+    bad:  ["rgba(255,42,74,.80)", "#ff8ea1"],
+  };
+
+  function vitalsBuild() {
+    vitalsBox = document.createElement("div");
+    vitalsBox.style.cssText =
+      "position:fixed;left:18px;z-index:54;pointer-events:none;" +
+      "top:calc(14px + var(--av-top-inset,0px));" +
+      "box-sizing:border-box;padding:10px 13px 11px;border-radius:10px;" +
+      "min-width:200px;background:rgba(8,10,12,.92);" +
+      "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
+    document.body.appendChild(vitalsBox);
+    addEventListener("keydown", e => {
+      if (e.key === "v" || e.key === "V") {
+        vitalsHidden = !vitalsHidden;
+        vitalsBox.style.display = vitalsHidden ? "none" : "block";
+      }
+    });
+  }
+
+  function vitalsUpdate() {
+    const v = A.vitals;
+    if (!v) {
+      if (vitalsBox) { vitalsBox.style.opacity = "0"; vitalsSig = ""; }
+      return;
+    }
+    if (!vitalsBox) vitalsBuild();
+    // Signature so an unchanged reading costs no DOM work at 8 Hz.
+    const sig = JSON.stringify(v);
+    if (sig === vitalsSig) return;
+    vitalsSig = sig;
+
+    const [edge, ink] = VITALS_COLOR[v.verdict] || VITALS_COLOR.warn;
+    vitalsBox.style.border = "1px solid " + edge;
+    vitalsBox.style.boxShadow = "0 0 22px " + edge;
+
+    const mono = "'SF Mono',Menlo,Consolas,monospace";
+    const mins = v.uptimeSec != null ? Math.floor(v.uptimeSec / 60) : null;
+    // Only name a drop counter when it is actually non-zero. A row of
+    // zeroes trains the eye to stop reading the card.
+    const rows = [];
+    rows.push(["BITRATE", v.kbps != null ? v.kbps + " kbps" : "--"]);
+    if (v.fps != null) rows.push(["FPS", String(v.fps)]);
+    if (v.congestion) rows.push(["NETWORK", v.congestion + "% congested"]);
+    if (v.encoderPct || v.encoderNow) rows.push(["ENCODER", v.encoderPct + "% dropped"]);
+    if (v.renderPct || v.renderNow) rows.push(["GPU", v.renderPct + "% missed"]);
+    if (v.cpu != null) rows.push(["CPU", v.cpu + "%"]);
+    if (mins != null) rows.push(["UP", mins + " min"]);
+
+    vitalsBox.innerHTML = "";
+    const head = document.createElement("div");
+    head.style.cssText =
+      "font:11px " + mono + ";letter-spacing:.2em;text-transform:uppercase;" +
+      "color:" + ink + ";margin-bottom:8px";
+    head.textContent = "STREAM " + String(v.verdict).toUpperCase();
+    vitalsBox.appendChild(head);
+
+    for (const [k, val] of rows) {
+      const r = document.createElement("div");
+      r.style.cssText =
+        "display:flex;justify-content:space-between;gap:16px;" +
+        "font:12px/1.7 " + mono + ";color:#cfd8dc";
+      const a = document.createElement("span");
+      a.style.cssText = "color:#6d7b82;letter-spacing:.1em";
+      a.textContent = k;
+      const b = document.createElement("span");
+      b.textContent = val;
+      r.appendChild(a); r.appendChild(b);
+      vitalsBox.appendChild(r);
+    }
+    vitalsBox.style.opacity = "1";
+  }
 
 
   /* ------------------- take back the line (our fork) ---------------------- */
