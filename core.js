@@ -298,7 +298,11 @@ const AV = (() => {
   // The box is built on first need rather than at init, so a face that never
   // sees a prompt never gets the DOM at all.
   let promptBox = null, promptLabel = null, promptInput = null;
-  let promptShown = "", promptSending = false;
+  let promptShown = "", promptSending = false, promptFree = false;
+
+  // True whenever the field is up, from either direction. Every single-letter
+  // face key checks this so a typed sentence cannot fire S, C, V or L.
+  const promptOpen = () => !!promptShown || promptFree;
 
   function promptBuild() {
     promptBox = document.createElement("div");
@@ -349,6 +353,7 @@ const AV = (() => {
 
   function promptHide() {
     promptShown = "";
+    promptFree = false;
     if (!promptBox) return;
     promptBox.style.opacity = "0";
     promptBox.style.pointerEvents = "none";
@@ -397,6 +402,31 @@ const AV = (() => {
     requestAnimationFrame(() => promptInput.focus());
   }
 
+  // OUR FORK: the box on demand. The prompt path above only opens it when the
+  // agent is waiting on an answer; this is the other direction -- Mind wants
+  // to say something without using the mic. Slash is the shortcut every chat
+  // app trained us on, and no face binds it.
+  //
+  // It opens in "free" mode: promptShown stays empty so a later promptUpdate()
+  // with no question does not yank the box out from under a half-typed line.
+  function promptFreeOpen() {
+    if (!promptBox) promptBuild();
+    promptFree = true;
+    promptLabel.textContent = "TYPE TO JANUS";
+    promptBox.style.opacity = "1";
+    promptBox.style.pointerEvents = "auto";
+    promptBox.style.transform = "translateX(-50%) translateY(0)";
+    promptInput.value = "";
+    requestAnimationFrame(() => promptInput.focus());
+  }
+
+  addEventListener("keydown", e => {
+    if (e.key !== "/" || promptOpen()) return;
+    // Otherwise the slash lands in the field as the first character.
+    e.preventDefault();
+    promptFreeOpen();
+  });
+
   // A face can raise its own prompt (used by the shot harness and anything
   // that wants to ask a question without going through the voice line).
   A.ask = (question) => { A.prompt = String(question || ""); promptUpdate(); };
@@ -432,6 +462,7 @@ const AV = (() => {
       "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
     document.body.appendChild(vitalsBox);
     addEventListener("keydown", e => {
+      if (promptOpen()) return;
       if (e.key === "v" || e.key === "V") {
         vitalsHidden = !vitalsHidden;
         vitalsBox.style.display = vitalsHidden ? "none" : "block";
@@ -586,7 +617,7 @@ const AV = (() => {
     addEventListener("keydown", e => {
       // Ignore both while typing an answer, or "clear the stage" typed into
       // the input box would wipe the screen a letter at a time.
-      if (promptShown) return;
+      if (promptOpen()) return;
       if (e.key === "s" || e.key === "S") {
         stageHidden = !stageHidden;
         stageWrap.style.display = stageHidden ? "none" : "flex";
@@ -741,6 +772,7 @@ const AV = (() => {
       "width:min(300px,34vw);display:flex;flex-direction:column;gap:12px";
     document.body.appendChild(panelWrap);
     addEventListener("keydown", e => {
+      if (promptOpen()) return;
       if (e.key === "l" || e.key === "L") {
         panelsHidden = !panelsHidden;
         panelWrap.style.display = panelsHidden ? "none" : "flex";
