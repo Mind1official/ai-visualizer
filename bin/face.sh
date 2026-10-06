@@ -7,9 +7,12 @@
 #   face.sh '{"a":"present","title":"WHO OWES","body":"48 families ..."}'
 #   face.sh '{"a":"add","title":"NOTE","body":"second card"}'
 #   face.sh '{"a":"present","title":"RENDER","src":"shot.png"}'   # stage-media/
+#   face.sh '{"a":"present","title":"CHANNEL","copy":"https://twitch.tv/mind1"}'
 #   face.sh '{"a":"remove","id":"c123"}'
 #   face.sh '{"a":"clear"}'
 #
+# copy    = renders a COPY button that puts that exact string on the clipboard,
+#           for anything the user has to paste rather than read.
 # present = center stage, enlarged, everything else dimmed.
 # add     = another card alongside whatever is already up.
 # Images must live in stage-media/ (the server serves nothing outside its

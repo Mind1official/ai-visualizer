@@ -407,9 +407,13 @@ def stage_action(body):
         "title": str(body.get("title") or "")[:160],
         "body": str(body.get("body") or "")[:6000],
         "src": str(body.get("src") or "")[:300],
+        # A string the user needs on their clipboard -- a url, a token name, a
+        # command. The face renders a COPY button for it; the card itself can
+        # stay readable prose while the button carries the exact text.
+        "copy": str(body.get("copy") or "")[:4000],
     }
-    if not (card["title"] or card["body"] or card["src"]):
-        raise ValueError("a card needs a title, a body or a src")
+    if not (card["title"] or card["body"] or card["src"] or card["copy"]):
+        raise ValueError("a card needs a title, a body, a src or a copy")
     # Replace rather than duplicate when the same id comes back: re-presenting
     # a card is how you update it.
     stage["cards"] = [c for c in stage["cards"] if c.get("id") != card["id"]]

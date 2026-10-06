@@ -844,6 +844,38 @@ const AV = (() => {
       b.textContent = c.body;
       el.appendChild(b);
     }
+    // A copy button, for the one thing a face card cannot do by being read
+    // aloud: hand over an exact string. Clicking it puts c.copy on the
+    // clipboard, so a url or a command goes into the paste buffer without
+    // anyone transcribing it by ear. localhost counts as a secure context,
+    // so navigator.clipboard is available; the textarea fallback is there
+    // for the OBS browser source, which is not always so generous.
+    if (c.copy) {
+      const btn = document.createElement("button");
+      btn.style.cssText =
+        "margin-top:14px;align-self:flex-start;cursor:pointer;" +
+        "padding:7px 15px;border:1px solid #B60232;border-radius:4px;" +
+        "background:rgba(182,2,50,.14);color:#f2dfe4;letter-spacing:.14em;" +
+        "font:11px 'SF Mono',Menlo,Consolas,monospace;text-transform:uppercase";
+      const label = () => { btn.textContent = "copy"; };
+      label();
+      btn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(c.copy);
+        } catch (e) {
+          const ta = document.createElement("textarea");
+          ta.value = c.copy;
+          ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); } catch (e2) {}
+          ta.remove();
+        }
+        btn.textContent = "copied";
+        setTimeout(label, 1600);
+      };
+      el.appendChild(btn);
+    }
     return el;
   }
 
