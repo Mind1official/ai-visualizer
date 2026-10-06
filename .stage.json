@@ -1,5 +1,12 @@
 {
- "cards": [],
- "focus": "",
- "ts": 1791144938.0815215
+ "cards": [
+  {
+   "id": "c286621138",
+   "title": "OBS MODE",
+   "body": "If you can read this card but see no side panels and no input box, the overlay URL is working.",
+   "src": ""
+  }
+ ],
+ "focus": "c286621138",
+ "ts": 1791286621.1382594
 }

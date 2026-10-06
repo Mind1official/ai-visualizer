@@ -1,42 +1,56 @@
 {
- "now": [
-  {
-   "id": "i1448038920",
-   "text": "Face stage + typed input (ai-visualizer fork)",
-   "done": false
-  },
-  {
-   "id": "i1448038921",
-   "text": "Workstation stability watch - Fast Startup off",
-   "done": false
-  }
- ],
+ "now": [],
  "todo": [
   {
-   "id": "i1448040180",
-   "text": "Bounce the voice line to arm typed input",
+   "id": "i1484415101",
+   "text": "Amber: 2FA on amber@hitthefloordancestudio.com (her remote lock)",
    "done": false
   },
   {
-   "id": "i1448040191",
-   "text": "Amber tests her Gmail line when home",
+   "id": "i150825712",
+   "text": "Connect Amber's social media to Jarvis",
    "done": false
   },
   {
-   "id": "i1448040192",
-   "text": "Two test clips on the channel - keep or delete",
+   "id": "i162279951",
+   "text": "Build the list: email capture on mind1official.com (no subscribers table today)",
    "done": false
   },
   {
-   "id": "i1448040193",
-   "text": "v1key -> v1key-next: retire it?",
+   "id": "i201753942",
+   "text": "Stream Control Desk: stream health + title changes in one surface (plan written)",
    "done": false
   },
   {
-   "id": "i1448040194",
-   "text": "Janus launcher has never been double-clicked",
+   "id": "i204273701",
+   "text": "Close the \"permissions\" plural gap in the voice console",
+   "done": true
+  },
+  {
+   "id": "i219358151",
+   "text": "Tonight with Amber: ntfy app (her own topic) + auth.mjs amber",
+   "done": false
+  },
+  {
+   "id": "i219358286",
+   "text": "Stream watch is UNTESTED against a real stream - check next time live",
+   "done": true
+  },
+  {
+   "id": "i227952244",
+   "text": "WED: next week's posts (Oct 12-18) + the clip drops",
+   "done": false
+  },
+  {
+   "id": "i250720990",
+   "text": "Friday Oct 9 clip drop: still no clip chosen",
+   "done": false
+  },
+  {
+   "id": "i286813635",
+   "text": "Test the OBS overlay URL from the stream PC (firewall on 8790?)",
    "done": false
   }
  ],
- "ts": 1791144809.9678211
+ "ts": 1791286813.6357317
 }

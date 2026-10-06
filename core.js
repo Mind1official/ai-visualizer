@@ -61,6 +61,24 @@ const AV = (() => {
   const SHOT_T = parseInt(Q.get("t") || "4000", 10);
   const DEMO = Q.get("demo") === "1" || location.protocol === "file:" || !!SHOT;
 
+  // OBS MODE. A browser source wants the face and the stage and nothing
+  // else: the side cards and the typed-input box are desk furniture, and on
+  // stream they are either clutter or a small privacy leak. `?obs=1` drops
+  // the lot; `?hide=lists,vitals,input` picks individually. The keyboard
+  // toggles are untouched, so the window Mind actually looks at is unchanged.
+  //
+  // Hiding is done with display:none !important AFTER the element is built,
+  // rather than by skipping the build: every caller assumes its box exists,
+  // so not building one would mean guarding a dozen call sites.
+  const HIDE = new Set(
+    (Q.get("obs") === "1" ? "lists,vitals,watcher,input," : "")
+      .concat(Q.get("hide") || "")
+      .split(",").map(x => x.trim().toLowerCase()).filter(Boolean));
+  const hidden = (what) => HIDE.has(what);
+  function obsHide(el, what) {
+    if (el && hidden(what)) el.style.setProperty("display", "none", "important");
+  }
+
   // where core.js lives -> where assets/ lives (works over http and file://)
   const ROOT = new URL(".", document.currentScript.src);
 
@@ -167,6 +185,8 @@ const AV = (() => {
     reclaimUpdate();
     A.vitals = raw.vitals || null;
     vitalsUpdate();
+    A.watcher = raw.watcher || null;
+    watcherUpdate();
 
     // adaptive envelope: normalize against a decaying peak, then ease
     // (attack 50ms, release 350ms) — motion code rides AV.env
@@ -349,6 +369,7 @@ const AV = (() => {
     promptBox.appendChild(hint);
 
     document.body.appendChild(promptBox);
+    obsHide(promptBox, "input");
   }
 
   function promptHide() {
@@ -461,6 +482,7 @@ const AV = (() => {
       "min-width:200px;background:rgba(8,10,12,.92);" +
       "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
     document.body.appendChild(vitalsBox);
+    obsHide(vitalsBox, "vitals");
     addEventListener("keydown", e => {
       if (promptOpen()) return;
       if (e.key === "v" || e.key === "V") {
@@ -521,6 +543,74 @@ const AV = (() => {
       vitalsBox.appendChild(r);
     }
     vitalsBox.style.opacity = "1";
+  }
+
+
+  /* ------------------ chat watcher tally (our fork) ------------------------ */
+  // What Janus's chat duty is costing, in the same visual language as the
+  // vitals box and stacked directly under it. The server sends null unless
+  // the watcher is alive AND the channel is live, so this is a stream-time
+  // card only -- it is absent the rest of the day rather than parked at zero.
+  //
+  // It rides the V key with the vitals on purpose: they are one glance, not
+  // two, and Mind should be able to clear both from screen with one press.
+  let watcherBox = null, watcherSig = "";
+
+  function watcherBuild() {
+    watcherBox = document.createElement("div");
+    watcherBox.style.cssText =
+      "position:fixed;left:18px;z-index:54;pointer-events:none;" +
+      "top:calc(14px + var(--av-top-inset,0px) + 210px);" +
+      "box-sizing:border-box;padding:10px 13px 11px;border-radius:10px;" +
+      "min-width:200px;background:rgba(8,10,12,.92);" +
+      "border:1px solid rgba(182,2,50,.65);box-shadow:0 0 22px rgba(182,2,50,.65);" +
+      "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
+    document.body.appendChild(watcherBox);
+    obsHide(watcherBox, "watcher");
+  }
+
+  function watcherUpdate() {
+    const w = A.watcher;
+    if (!w) {
+      if (watcherBox) { watcherBox.style.opacity = "0"; watcherSig = ""; }
+      return;
+    }
+    if (!watcherBox) watcherBuild();
+    // The vitals key hides both cards; honor it without a second listener.
+    if (vitalsHidden) { watcherBox.style.display = "none"; }
+    else { watcherBox.style.display = "block"; }
+    const sig = JSON.stringify(w);
+    if (sig === watcherSig) return;
+    watcherSig = sig;
+
+    const mono = "'SF Mono',Menlo,Consolas,monospace";
+    const n = v => (v == null ? "--" : Number(v).toLocaleString());
+    const rows = [["REPLIES", n(w.replies)], ["CALLS", n(w.calls)],
+                  ["TOKENS IN", n(w.tin)], ["TOKENS OUT", n(w.tout)],
+                  ["TOTAL", n((w.tin || 0) + (w.tout || 0))]];
+
+    watcherBox.innerHTML = "";
+    const head = document.createElement("div");
+    head.style.cssText =
+      "font:11px " + mono + ";letter-spacing:.2em;text-transform:uppercase;" +
+      "color:#ff8ea1;margin-bottom:8px";
+    head.textContent = "CHAT WATCHER";
+    watcherBox.appendChild(head);
+
+    for (const [k, val] of rows) {
+      const r = document.createElement("div");
+      r.style.cssText =
+        "display:flex;justify-content:space-between;gap:16px;" +
+        "font:12px/1.7 " + mono + ";color:#cfd8dc";
+      const a = document.createElement("span");
+      a.style.cssText = "color:#6d7b82;letter-spacing:.1em";
+      a.textContent = k;
+      const b = document.createElement("span");
+      b.textContent = val;
+      r.appendChild(a); r.appendChild(b);
+      watcherBox.appendChild(r);
+    }
+    watcherBox.style.opacity = "1";
   }
 
 
@@ -771,6 +861,7 @@ const AV = (() => {
       "top:calc(14px + var(--av-top-inset,0px));" +
       "width:min(300px,34vw);display:flex;flex-direction:column;gap:12px";
     document.body.appendChild(panelWrap);
+    obsHide(panelWrap, "lists");
     addEventListener("keydown", e => {
       if (promptOpen()) return;
       if (e.key === "l" || e.key === "L") {

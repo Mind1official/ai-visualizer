@@ -238,6 +238,34 @@ def read_vitals():
     }
 
 
+# --- chat watcher tally (our fork) --------------------------------------
+# The chat watcher is a separate process (tools/chat-watcher.py); it drops
+# its running token count in a small JSON file and we serve it beside the
+# vitals. File, not an HTTP push: the watcher must never block on the face
+# being up, and the face must never block on the watcher.
+#
+# Same staleness doctrine as the vitals -- a frozen counter is worse than
+# no counter, because it is believed.
+WATCHER_FILE = BUS / ".watcher_tally"
+WATCHER_STALE_S = 40
+
+
+def read_watcher():
+    """The watcher's tally, or None when it is not running or not live."""
+    try:
+        d = json.loads(WATCHER_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if time.time() - float(d.get("ts") or 0) > WATCHER_STALE_S:
+        return None
+    # The watcher only writes live=true while the channel is actually live,
+    # and this card is for stream time only.
+    if not d.get("live"):
+        return None
+    return {"replies": d.get("replies"), "calls": d.get("calls"),
+            "tin": d.get("in"), "tout": d.get("out")}
+
+
 def read_bus():
     if MOCK:
         return mock_bus()
@@ -312,7 +340,8 @@ def read_bus():
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
-            "prompt": prompt, "remote": remote, "vitals": read_vitals()}
+            "prompt": prompt, "remote": remote, "vitals": read_vitals(),
+            "watcher": read_watcher()}
 
 
 # --- the stage (our fork) ----------------------------------------------------
