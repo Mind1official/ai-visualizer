@@ -67,16 +67,61 @@ const AV = (() => {
   // the lot; `?hide=lists,vitals,input` picks individually. The keyboard
   // toggles are untouched, so the window Mind actually looks at is unchanged.
   //
-  // Hiding is done with display:none !important AFTER the element is built,
-  // rather than by skipping the build: every caller assumes its box exists,
-  // so not building one would mean guarding a dozen call sites.
+  // HOW the hiding works, because the obvious way is wrong. Setting
+  // el.style.display = "none" !important inline looks right and fails: any
+  // later `el.style.display = "block"` REPLACES that declaration, priority
+  // and all, and several update paths do exactly that every few seconds (the
+  // watcher card was back on screen within one poll). So instead we add a
+  // class and let an author stylesheet rule carry the !important -- a
+  // stylesheet !important beats a plain inline style, so the update paths can
+  // set display all they like and the card stays gone.
+  //
+  // The elements are still BUILT as normal: every caller assumes its box
+  // exists, and not building one would mean guarding a dozen call sites.
+  // `transcript` and `usage` are not core's -- they belong to the face (the
+  // radial face draws #transcript-panel and #usage-gauge). They are in the
+  // obs set anyway because they are the two things a viewer must NOT see:
+  // the transcript is the entire conversation, including whatever Mind said
+  // to Janus off-mic, and the gauge is plan spend. Missing them was the
+  // whole bug the first time round -- the cards I hid were not the cards on
+  // screen. A face opts in simply by using those ids.
   const HIDE = new Set(
-    (Q.get("obs") === "1" ? "lists,vitals,watcher,input," : "")
+    (Q.get("obs") === "1" ? "lists,vitals,watcher,input,transcript,usage,activity," : "")
       .concat(Q.get("hide") || "")
       .split(",").map(x => x.trim().toLowerCase()).filter(Boolean));
   const hidden = (what) => HIDE.has(what);
+  if (HIDE.size) {
+    const st = document.createElement("style");
+    st.textContent = ".av-obs-hidden{display:none!important}";
+    (document.head || document.documentElement).appendChild(st);
+  }
   function obsHide(el, what) {
-    if (el && hidden(what)) el.style.setProperty("display", "none", "important");
+    if (el && hidden(what)) el.classList.add("av-obs-hidden");
+  }
+
+  // Face-owned furniture, hidden by id once the page exists.
+  const FACE_PARTS = {
+    transcript: "#transcript-panel",
+    usage: "#usage-gauge, #context-gauge",   // plan spend AND context gauge
+    activity: "#activity-panel",             // what the agent is doing, live
+  };
+  function obsHideFaceParts() {
+    for (const [what, sel] of Object.entries(FACE_PARTS)) {
+      if (!hidden(what)) continue;
+      document.querySelectorAll(sel).forEach(el => el.classList.add("av-obs-hidden"));
+    }
+  }
+  if (HIDE.size) {
+    if (document.readyState === "loading")
+      addEventListener("DOMContentLoaded", obsHideFaceParts);
+    else obsHideFaceParts();
+    // A face may build its panel later than DOMContentLoaded, so sweep a few
+    // times rather than trusting one moment. Cheap, and it ends.
+    let tries = 0;
+    const sweep = setInterval(() => {
+      obsHideFaceParts();
+      if (++tries > 20) clearInterval(sweep);
+    }, 500);
   }
 
   // where core.js lives -> where assets/ lives (works over http and file://)
