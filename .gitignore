@@ -7,3 +7,6 @@ __pycache__/
 .voice_alert
 # your personal config, created at setup: never tracked, never touched by updates
 ai-visualizer.json
+# live stage/list state, rewritten constantly by the server: not source
+.stage.json
+.panels.json
