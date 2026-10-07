@@ -42,6 +42,7 @@ voice line (backtalk writes them natively, github.com/jaredrhod/backtalk):
   .voice_waveform     JSON {ts, samples: [64 floats]} while audio plays
   .voice_loading_pid  exists while the voice line plays a thinking sound
   .voice_alert        optional: non-empty file = attention needed
+  .voice_answeronly   exists while answer-only mode is on
   .voice_context      optional: JSON context-window fill (show_context)
 
 Where the bus lives comes from "bus_dir" in ai-visualizer.json (default:
@@ -372,10 +373,15 @@ def read_bus():
     # escape hatch left at the desk -- the local mic is paused for the whole
     # time a remote session is live.
     remote = (BUS / ".voice_remote").exists()
+    # .voice_answeronly exists while the mic only answers to utterances
+    # that lead with the agent's name. The face says so, because a silent
+    # gate looks exactly like a broken microphone.
+    answer_only = (BUS / ".voice_answeronly").exists()
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
-            "prompt": prompt, "remote": remote, "vitals": read_vitals(),
+            "prompt": prompt, "remote": remote,
+            "answer_only": answer_only, "vitals": read_vitals(),
             "watcher": read_watcher(), "health": read_health()}
 
 

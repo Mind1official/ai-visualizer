@@ -227,6 +227,9 @@ const AV = (() => {
     A.prompt = raw.prompt || "";
     promptUpdate();
     A.remote = !!raw.remote;
+    // OUR FORK: answer-only mode -- the mic ignores anything that does not
+    // lead with the agent's name. Faces that care draw a badge for it.
+    A.answerOnly = !!raw.answer_only;
     reclaimUpdate();
     A.vitals = raw.vitals || null;
     vitalsUpdate();

@@ -819,10 +819,26 @@ function frame(dt){
 
   drawMeters(AV.state,AV.env);
 
+  if(AV.answerOnly)drawAnswerOnly(cxp,cyp);
   if(AV.alert)drawAlert(cxp,cyp,innerR,dt60);
   if(AV.compacting)drawCompacting(cxp,cyp,innerR);
   document.body.classList.toggle("music",!!AV.music);
   if(musicT>.02)drawMusicTag();
+}
+
+/* ANSWER ONLY MODE: one quiet line under the dial. The gate is
+   invisible otherwise, and a mic that ignores you looks identical to a
+   mic that is broken -- so the face says which one it is. Sits below the
+   orb ring labels (rRing*1.22), so it never collides with them. */
+function drawAnswerOnly(cxp,cyp){
+  const rRing=orb.S*.50/1.55;
+  ctx.save();
+  ctx.font="600 11px 'SF Mono',Menlo,Consolas,monospace";
+  ctx.fillStyle="rgb(220,60,100)";
+  ctx.shadowColor="rgba(255,45,90,.6)";ctx.shadowBlur=6;
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.fillText("ANSWER ONLY MODE",cxp,cyp+rRing*1.42);
+  ctx.restore();
 }
 
 /* The "MUSIC MODE" tag, bottom centre, pulsing with the kick. It sits in
