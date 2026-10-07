@@ -231,6 +231,10 @@ const AV = (() => {
     A.vitals = raw.vitals || null;
     vitalsUpdate();
     A.watcher = raw.watcher || null;
+    // OUR FORK: stack health, drawn by the faces that want it (the radial
+    // face has a panel for it). Null means the check has stopped running,
+    // and a face must treat that as "do not show" rather than "fine".
+    A.health = raw.health || null;
     watcherUpdate();
 
     // adaptive envelope: normalize against a decaying peak, then ease

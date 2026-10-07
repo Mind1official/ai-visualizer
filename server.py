@@ -266,6 +266,41 @@ def read_watcher():
             "tin": d.get("in"), "tout": d.get("out")}
 
 
+# --- stack health (our fork) -------------------------------------------
+# tools/health.py drops its verdict and a rolling history here on every run.
+# File, not a push, for the same reason as the watcher tally: neither side
+# may block on the other being up.
+#
+# The check runs every 15 minutes, so "stale" has to be generous -- but it
+# still has to EXIST. A health panel frozen at OK is the worst object in this
+# whole stack, because it is the one thing Mind would trust without looking.
+# Two missed runs and the panel disappears instead of lying.
+HEALTH_FILE = BUS / ".health"
+HEALTH_STALE_S = 2400
+
+
+def read_health():
+    """The stack's health, or None when the check has stopped running."""
+    try:
+        d = json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    try:
+        age = time.time() - float(d.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if age < 0 or age > HEALTH_STALE_S:
+        return None
+    hist = d.get("hist")
+    return {"verdict": d.get("verdict") or "unknown",
+            "up": d.get("up"), "total": d.get("total"),
+            "idle": d.get("idle") or 0,
+            "down": [n for n in (d.get("down") or []) if isinstance(n, str)],
+            "age_s": int(age),
+            "hist": [int(h) for h in hist if isinstance(h, (int, float))]
+                    if isinstance(hist, list) else []}
+
+
 def read_bus():
     if MOCK:
         return mock_bus()
@@ -341,7 +376,7 @@ def read_bus():
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
             "prompt": prompt, "remote": remote, "vitals": read_vitals(),
-            "watcher": read_watcher()}
+            "watcher": read_watcher(), "health": read_health()}
 
 
 # --- the stage (our fork) ----------------------------------------------------

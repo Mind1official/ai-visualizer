@@ -83,6 +83,50 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex:none;text-decoration:none}
   #context-gauge .cg-legend em{margin-left:auto;font-style:normal;
     color:rgba(255,225,233,.9)}
+  /* STACK HEALTH (our fork) -- tools/health.py -> .health -> AV state.
+     Bottom-left, riding directly above the MIC IN meter, in the SAME
+     visual language as the context gauge: Mind asked for it to look like
+     the token and context panels rather than like canvas chrome, so it is
+     a DOM panel with the same gradient, border, glow and 9px uppercase
+     head, not hand-painted bars.
+
+     It is absent, never reassuring: the server sends null once the check
+     has missed two runs, and a health panel frozen at OK would be the one
+     object here Mind would trust without checking. */
+  body.music #health-gauge{opacity:0!important;pointer-events:none!important;
+    transition:opacity 1s ease!important}
+  #health-gauge{position:fixed;left:18px;z-index:6;cursor:auto;
+    width:186px;padding:9px 12px 10px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #health-gauge.on{opacity:1;transform:translateY(0)}
+  #health-gauge .hg-head{display:flex;justify-content:space-between;
+    align-items:baseline;letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase}
+  #health-gauge .hg-head b{font-weight:400;letter-spacing:.06em;
+    color:rgba(255,120,155,.9)}
+  /* The sparkline: one cell per run, oldest left. Fixed height so the
+     panel never changes size as history fills -- a box that grows for a
+     day and then stops is a box that looks broken on day one. */
+  #health-gauge .hg-spark{display:flex;align-items:flex-end;gap:1px;
+    height:20px;margin-top:6px}
+  #health-gauge .hg-spark i{display:block;flex:1 1 0;min-width:1px;
+    border-radius:1px;background:rgba(182,2,50,.75)}
+  #health-gauge .hg-spark i.bad{background:rgb(255,90,120)}
+  #health-gauge .hg-spark i.gap{background:rgba(255,190,205,.12)}
+  #health-gauge .hg-word{margin-top:6px;font-size:17px;letter-spacing:.02em;
+    color:rgb(255,225,233);line-height:1.1}
+  #health-gauge .hg-word.bad{color:rgb(255,120,150)}
+  #health-gauge .hg-sub{font-size:9px;color:rgba(255,200,214,.78);
+    margin-top:1px;letter-spacing:.06em;text-transform:uppercase}
+  #health-gauge .hg-down{font-size:10px;color:rgb(255,150,175);
+    margin-top:4px;word-break:break-word}
   /* PLAN USAGE -- the 5h and 7d windows. Lives directly ABOVE the context
      gauge in the same right-hand column (it used to be painted on the
      canvas bottom-left), so the three numbers that answer "how much room
@@ -124,6 +168,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <div id="transcript-panel" class="hud-panel"></div>
 <div id="usage-gauge"></div>
 <div id="context-gauge"></div>
+<div id="health-gauge"></div>
 <script src="../../core.js"></script>
 <script>
 "use strict";
@@ -1045,6 +1090,61 @@ function cgRender(d){
   cgEl.classList.add("on");
   cgPlace();
 }
+/* ---------------- stack health ----------------
+   tools/health.py writes .health every run; server.py serves it on /state
+   as AV.health and sends NULL once it has missed two runs, so this panel
+   vanishes rather than freezing at OK.
+
+   Placement: bottom-left, sitting directly on top of the MIC IN meter,
+   which is canvas chrome at a known offset rather than a DOM element --
+   hence the constant instead of a measured height. */
+const hgEl=document.getElementById("health-gauge");
+const HG_MIC_H=74;      /* MIC IN label + bars + breathing room */
+function hgPlace(){
+  hgEl.style.bottom=(chromeInset()+HG_MIC_H)+"px";
+}
+let hgSig="";
+function hgRender(){
+  const h=AV.health;
+  if(!h){ hgEl.classList.remove("on"); hgSig=""; hgPlace(); return }
+  /* Signature so the DOM is only rebuilt when something actually changed:
+     this runs on a timer and the panel is mostly static. */
+  const sig=JSON.stringify([h.verdict,h.up,h.total,h.idle,h.down,
+                            Math.floor((h.age_s||0)/60),h.hist]);
+  if(sig!==hgSig){
+    hgSig=sig;
+    const hist=Array.isArray(h.hist)?h.hist:[];
+    /* The sparkline wants a fixed number of cells so the panel never
+       resizes: pad the left with empty ones until history fills in. */
+    const CELLS=24;
+    const tail=hist.slice(-CELLS);
+    const pad=CELLS-tail.length;
+    let spark="";
+    for(let i=0;i<pad;i++) spark+='<i class="gap" style="height:3px"></i>';
+    for(const d of tail){
+      /* Full height is clean. Each required thing missing takes a bite,
+         floored so a bad run is still visible rather than a hairline. */
+      const pct=Math.max(18,100-d*34);
+      spark+=`<i class="${d?"bad":""}" style="height:${pct}%"></i>`;
+    }
+    const bad=h.verdict!=="ok";
+    const word=bad?(h.down&&h.down.length?"DEGRADED":h.verdict.toUpperCase())
+                  :"STACK OK";
+    const mins=Math.floor((h.age_s||0)/60);
+    const when=mins<1?"checked just now":`checked ${mins} min ago`;
+    hgEl.innerHTML=
+      `<div class="hg-head"><span>Stack health</span>`
+      +`<b>${h.up}/${h.total}</b></div>`
+      +`<div class="hg-spark">${spark}</div>`
+      +`<div class="hg-word${bad?" bad":""}">${word}</div>`
+      +`<div class="hg-sub">${when}${h.idle?` - ${h.idle} idle`:""}</div>`
+      +(h.down&&h.down.length
+        ? `<div class="hg-down">${h.down.join(", ")} down</div>` : "");
+  }
+  hgEl.classList.add("on");
+  hgPlace();
+}
+
 async function pollContext(){
   try{
     const r=await fetch("/context",{cache:"no-store"});
@@ -1068,6 +1168,9 @@ setInterval(cgPlace,1000);
 ugRender();
 setInterval(ugRender,5000);
 addEventListener("resize",ugPlace);
+hgRender();
+setInterval(hgRender,2000);
+addEventListener("resize",hgPlace);
 /* core.js parks the thinking-sound toggle at the bottom-left edge, which
    the transcript panel also covers. Publish the inset so it can lift. */
 function publishInset(){
