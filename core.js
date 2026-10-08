@@ -883,7 +883,79 @@ const AV = (() => {
       };
       el.appendChild(btn);
     }
+    stageDraggable(el, c);
     return el;
+  }
+
+  // Drag a card where you want it. The stage lays cards out automatically,
+  // which is right until the user wants one somewhere specific -- behind the
+  // face's left eye, or out of the way of the lists. A dropped card posts its
+  // position back to the server as a FRACTION of the viewport, so it survives
+  // a restage, a restart and a different screen.
+  //
+  // Double-click sends a card back to the automatic layout. Without that, a
+  // stage dragged into a pile has no way out but `clear`.
+  function stageDraggable(el, c) {
+    const parked = typeof c.x === "number" && typeof c.y === "number";
+    if (parked) {
+      el.style.position = "absolute";
+      el.style.left = (c.x * 100).toFixed(3) + "%";
+      el.style.top = (c.y * 100).toFixed(3) + "%";
+    }
+    el.style.cursor = "grab";
+    el.addEventListener("mousedown", e => {
+      // A card is also something you read: let the copy button, links and
+      // text selection win. Only a drag on the card's own chrome moves it.
+      if (e.button !== 0) return;
+      if (e.target.closest("button,a,input,textarea")) return;
+      if (e.detail > 1) return;             // the dblclick reset, not a drag
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      let moved = false;
+      el.style.position = "absolute";
+      el.style.margin = "0";
+      el.style.width = r.width + "px";
+      el.style.left = r.left + "px";
+      el.style.top = r.top + "px";
+      el.style.cursor = "grabbing";
+      el.style.zIndex = "2";
+      const onMove = ev => {
+        moved = true;
+        el.style.left = (ev.clientX - dx) + "px";
+        el.style.top = (ev.clientY - dy) + "px";
+      };
+      const onUp = ev => {
+        removeEventListener("mousemove", onMove);
+        removeEventListener("mouseup", onUp);
+        el.style.cursor = "grab";
+        el.style.zIndex = "";
+        if (!moved) return;
+        // Clamp so a card can never be dropped entirely off-screen, which
+        // would leave it unreachable with no way to drag it back.
+        const x = Math.min(0.97, Math.max(0, (ev.clientX - dx) / innerWidth));
+        const y = Math.min(0.97, Math.max(0, (ev.clientY - dy) / innerHeight));
+        stageMove(c.id, x, y);
+      };
+      addEventListener("mousemove", onMove);
+      addEventListener("mouseup", onUp);
+      e.preventDefault();
+    });
+    el.addEventListener("dblclick", e => {
+      if (e.target.closest("button,a,input,textarea")) return;
+      stageMove(c.id, null, null);
+    });
+  }
+
+  function stageMove(id, x, y) {
+    // Clear the signature so the next poll repaints even though our own POST
+    // is what changed the stage -- otherwise a reset double-click looks dead
+    // for a second.
+    stageSig = "";
+    fetch("/stage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "move", id: id, x: x, y: y }),
+    }).catch(() => {});
   }
 
   function stageRender(stage) {

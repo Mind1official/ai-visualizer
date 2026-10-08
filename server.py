@@ -425,6 +425,7 @@ def stage_action(body):
 
       present   one thing center stage, everything else dimmed
       add       another card alongside whatever is up
+      move      park a card where the user dragged it (or send it back)
       remove    drop one card by id
       clear     empty the stage
 
@@ -434,6 +435,23 @@ def stage_action(body):
     stage = read_stage()
     if action == "clear":
         return write_stage({"cards": [], "focus": ""})
+    # Where the user dragged a card to, as a fraction of the viewport, so the
+    # same drop point survives a different screen. Sending no coordinates is
+    # how a card goes back to the automatic layout -- that is the escape hatch
+    # for a stage dragged into a pile.
+    if action == "move":
+        cid = str(body.get("id") or "")
+        x, y = body.get("x"), body.get("y")
+        for c in stage["cards"]:
+            if c.get("id") != cid:
+                continue
+            if x is None or y is None:
+                c.pop("x", None)
+                c.pop("y", None)
+            else:
+                c["x"] = min(1.0, max(0.0, float(x)))
+                c["y"] = min(1.0, max(0.0, float(y)))
+        return write_stage(stage)
     if action == "remove":
         cid = str(body.get("id") or "")
         stage["cards"] = [c for c in stage["cards"] if c.get("id") != cid]
@@ -442,7 +460,7 @@ def stage_action(body):
         return write_stage(stage)
     if action not in ("present", "add", "add_card"):
         raise ValueError(f"unknown action {action!r} "
-                         f"(present, add, remove, clear)")
+                         f"(present, add, move, remove, clear)")
     card = {
         "id": str(body.get("id") or f"c{int(time.time() * 1000) % 10**9}"),
         "title": str(body.get("title") or "")[:160],
@@ -456,7 +474,12 @@ def stage_action(body):
     if not (card["title"] or card["body"] or card["src"] or card["copy"]):
         raise ValueError("a card needs a title, a body, a src or a copy")
     # Replace rather than duplicate when the same id comes back: re-presenting
-    # a card is how you update it.
+    # a card is how you update it. Its PARKED POSITION is not part of that
+    # update, though -- the user put the card there, and rewriting the text
+    # inside it is no reason to throw it back into the auto-layout.
+    prior = next((c for c in stage["cards"] if c.get("id") == card["id"]), None)
+    if prior and "x" in prior and "y" in prior:
+        card["x"], card["y"] = prior["x"], prior["y"]
     stage["cards"] = [c for c in stage["cards"] if c.get("id") != card["id"]]
     stage["cards"].append(card)
     stage["cards"] = stage["cards"][-STAGE_MAX:]
