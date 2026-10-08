@@ -1031,6 +1031,10 @@ function cgTok(n){
   return String(n);
 }
 function cgPlace(){
+  /* A panel the user has DRAGGED owns its own position -- re-pinning its
+     bottom edge here would set top and bottom at once and stretch the box.
+     core.js sets this flag when it parks one, and clears it on reset. */
+  if(cgEl.dataset.avParked){ugPlace();return}
   /* ride directly on top of the transcript panel, whatever its height */
   cgEl.style.bottom=(transcriptPanel.offsetHeight+20)+"px";
   ugPlace();
@@ -1043,6 +1047,7 @@ function cgPlace(){
    voice line publishes no usage. */
 const ugEl=document.getElementById("usage-gauge");
 function ugPlace(){
+  if(ugEl.dataset.avParked)return;
   /* sit on the gauge when it is up, on the transcript when it is not */
   const base=transcriptPanel.offsetHeight+20;
   ugEl.style.bottom=(cgEl.classList.contains("on")
@@ -1117,6 +1122,7 @@ function cgRender(d){
 const hgEl=document.getElementById("health-gauge");
 const HG_MIC_H=74;      /* MIC IN label + bars + breathing room */
 function hgPlace(){
+  if(hgEl.dataset.avParked)return;
   hgEl.style.bottom=(chromeInset()+HG_MIC_H)+"px";
 }
 let hgSig="";

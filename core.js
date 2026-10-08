@@ -535,6 +535,7 @@ const AV = (() => {
       "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
     document.body.appendChild(vitalsBox);
     obsHide(vitalsBox, "vitals");
+    dragPanel(vitalsBox, "vitals", () => watcherBox);
     addEventListener("keydown", e => {
       if (promptOpen()) return;
       if (e.key === "v" || e.key === "V") {
@@ -619,6 +620,13 @@ const AV = (() => {
       "backdrop-filter:blur(3px);opacity:0;transition:opacity .3s";
     document.body.appendChild(watcherBox);
     obsHide(watcherBox, "watcher");
+    // Dragged BY the vitals card, never on its own: the two are one glance
+    // (that is also why they share the V key), and the 210px is the offset
+    // the stylesheet above already uses to stack them. Built at go-live,
+    // long after the vitals, so it asks to be placed under wherever the
+    // vitals currently sits.
+    watcherBox._avGapPx = 210;
+    if (vitalsBox && vitalsBox._avPlaceFollower) vitalsBox._avPlaceFollower();
   }
 
   function watcherUpdate() {
@@ -735,6 +743,191 @@ const AV = (() => {
     reclaimBtn.style.pointerEvents = "auto";
   }
 
+
+  /* ------------------- draggable chrome (our fork, 2026-10-08) -------------- */
+  // The stage cards became draggable first; everything ELSE on the face was
+  // still nailed down -- the lists, the vitals, the gauges. Mind's report:
+  // "I can drag the drag me, but nothing else."
+  //
+  // These are browser chrome, not agent content, so unlike a stage card their
+  // position lives in localStorage rather than on the server. The server has
+  // no business owning where a gauge sits on one screen, and `av_sound`
+  // already set that precedent. The cost, named: a parked gauge does NOT
+  // follow Mind to another machine. For window furniture that is the right
+  // trade.
+  //
+  // Stored as FRACTIONS of the viewport, same as stage cards, so a panel
+  // lands in the same relative place when the window is resized.
+  const POS_KEY = "av_pos_";
+
+  function posLoad(key) {
+    try {
+      const raw = localStorage.getItem(POS_KEY + key);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return (typeof p.x === "number" && typeof p.y === "number") ? p : null;
+    } catch (e) { return null; }
+  }
+
+  function posSave(key, p) {
+    try {
+      if (p) localStorage.setItem(POS_KEY + key, JSON.stringify(p));
+      else localStorage.removeItem(POS_KEY + key);
+    } catch (e) {}
+  }
+
+  // Parking means taking over placement completely: these elements are
+  // positioned with right/bottom and calc() insets, and leaving either set
+  // would fight the left/top we are about to write.
+  function posApply(el, p) {
+    if (!p) return;
+    // The flag a face checks before re-placing this element. The radial face
+    // re-pins its gauges by BOTTOM edge on every render (the context gauge
+    // rides on top of the transcript panel), so without this our top and its
+    // bottom are both set and the box stretches between them -- which is
+    // exactly what Mind saw: "the bottom of the cards are pinned".
+    el.dataset.avParked = "1";
+    el.style.left = (p.x * 100).toFixed(3) + "%";
+    el.style.top = (p.y * 100).toFixed(3) + "%";
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+  }
+
+  // `follow` is a FUNCTION returning a panel positioned relative to this one
+  // by a fixed offset -- the stream watcher card sits a set distance under the
+  // vitals card, so dragging the vitals has to carry it or the two halves of
+  // one glance come apart. A function rather than the element itself because
+  // the watcher only exists WHILE A STREAM IS LIVE: capturing it at wire time
+  // left the vitals undraggable every other hour of the day.
+  function dragPanel(el, key, follow) {
+    if (!el || el.dataset.avDraggable) return;
+    el.dataset.avDraggable = "1";
+    // Chrome panels are pointer-events:none so clicks reach the face through
+    // them. A panel you cannot point at is a panel you cannot drag, so the
+    // element itself becomes clickable -- its CONTENTS stay as they were.
+    el.style.pointerEvents = "auto";
+    el.style.cursor = "grab";
+    // WHERE HOME IS, captured before we park anything on top of it.
+    //
+    // The gauges are placed by the face's stylesheet, so for them "go home"
+    // really is "drop the inline styles". The lists and the vitals are NOT --
+    // core.js builds them with an inline cssText carrying left/right and a
+    // calc() inset, which IS inline style. Clearing it would not restore
+    // them, it would delete their placement outright and drop them wherever
+    // the document flow fancied. So remember the four values and put those
+    // back instead of blanking them.
+    el._avHome = { left: el.style.left, top: el.style.top,
+                   right: el.style.right, bottom: el.style.bottom };
+
+    // Re-applied on every drag and on demand, so a follower that appears
+    // later (the watcher, at go-live) lands under its leader rather than at
+    // the stylesheet's default while the leader sits somewhere else.
+    el._avPlaceFollower = () => {
+      const f = follow && follow();
+      if (!f) return;
+      if (!f._avHome)
+        f._avHome = { left: f.style.left, top: f.style.top,
+                      right: f.style.right, bottom: f.style.bottom };
+      const p = posLoad(key);
+      if (!p) return;
+      posApply(f, { x: p.x, y: p.y });
+      f.style.top = "calc(" + (p.y * 100).toFixed(3)
+                  + "% + " + f._avGapPx + "px)";
+    };
+    const saved = posLoad(key);
+    if (saved) { posApply(el, saved); el._avPlaceFollower(); }
+
+    el.addEventListener("mousedown", e => {
+      if (e.button !== 0) return;
+      if (e.target.closest("button,a,input,textarea")) return;
+      if (e.detail > 1) return;                 // leave the dblclick reset alone
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      let moved = false;
+      el.style.right = "auto";
+      el.style.bottom = "auto";
+      el.style.cursor = "grabbing";
+      const onMove = ev => {
+        moved = true;
+        const x = ev.clientX - dx, y = ev.clientY - dy;
+        el.style.left = x + "px";
+        el.style.top = y + "px";
+        el.dataset.avParked = "1";
+        const f = follow && follow();
+        if (f) {
+          f.style.right = "auto";
+          f.style.bottom = "auto";
+          f.style.left = x + "px";
+          f.style.top = (y + f._avGapPx) + "px";
+          f.dataset.avParked = "1";
+        }
+      };
+      const onUp = ev => {
+        removeEventListener("mousemove", onMove);
+        removeEventListener("mouseup", onUp);
+        el.style.cursor = "grab";
+        if (!moved) return;
+        // Clamped so a panel can never be dropped past the edge, where there
+        // would be nothing left on screen to grab it by.
+        const x = Math.min(0.97, Math.max(0, (ev.clientX - dx) / innerWidth));
+        const y = Math.min(0.97, Math.max(0, (ev.clientY - dy) / innerHeight));
+        posSave(key, { x, y });
+      };
+      addEventListener("mousemove", onMove);
+      addEventListener("mouseup", onUp);
+      e.preventDefault();
+    });
+
+    // Send it home. Clearing the inline styles hands placement back to the
+    // stylesheet that set it in the first place, insets and all.
+    el.addEventListener("dblclick", e => {
+      if (e.target.closest("button,a,input,textarea")) return;
+      posSave(key, null);
+      const f = follow && follow();
+      for (const t of f ? [el, f] : [el]) posGoHome(t);
+    });
+  }
+
+  function posGoHome(el) {
+    // Hand placement back to whoever owns it before restoring the values,
+    // so the next render re-pins it properly.
+    delete el.dataset.avParked;
+    const h = el._avHome;
+    el.style.left = h ? h.left : "";
+    el.style.top = h ? h.top : "";
+    el.style.right = h ? h.right : "";
+    el.style.bottom = h ? h.bottom : "";
+  }
+
+  // One way out. Double-click resets ONE panel; after a long session of
+  // shoving things around, R puts every one of them back where its stylesheet
+  // wanted it. Without this, a panel dragged under another is genuinely hard
+  // to recover -- you have to find the one on top first.
+  addEventListener("keydown", e => {
+    if (promptOpen()) return;
+    if (e.key !== "r" && e.key !== "R") return;
+    for (const el of document.querySelectorAll("[data-av-draggable]")) {
+      posGoHome(el);
+      el.style.cursor = "grab";
+    }
+    for (const k of ["lists", "vitals", "context-gauge", "health-gauge",
+                     "usage-gauge"]) posSave(k, null);
+  });
+
+  // The gauges belong to the face, not to core.js, and a face may build them
+  // later than DOMContentLoaded -- so sweep for them the same way the OBS
+  // hider already does, rather than trusting one moment.
+  function dragChromeSweep() {
+    for (const id of ["context-gauge", "health-gauge", "usage-gauge"])
+      dragPanel(document.getElementById(id), id);
+  }
+  {
+    let tries = 0;
+    const sweep = setInterval(() => {
+      dragChromeSweep();
+      if (++tries > 20) clearInterval(sweep);
+    }, 500);
+  }
 
   /* --------------------------- the stage (our fork) ------------------------ */
   // Cards shown on the face. DOM rather than canvas on purpose: text wrapping,
@@ -1017,6 +1210,9 @@ const AV = (() => {
       "top:calc(14px + var(--av-top-inset,0px));" +
       "width:min(300px,34vw);display:flex;flex-direction:column;gap:12px";
     document.body.appendChild(panelWrap);
+    // One handle for both lists: WORKING ON NOW and TO DO are a stack Mind
+    // reads as one thing, so they move as one thing.
+    dragPanel(panelWrap, "lists");
     obsHide(panelWrap, "lists");
     addEventListener("keydown", e => {
       if (promptOpen()) return;
