@@ -10,3 +10,12 @@ ai-visualizer.json
 # live stage/list state, rewritten constantly by the server: not source
 .stage.json
 .panels.json
+
+# Cards put on the stage: screenshots, previews, one-off images made for a
+# single conversation. Scratch, not source -- and a folder of them made the
+# morning sweep report the repo as carrying uncommitted work every day.
+stage-media/*.png
+stage-media/*.jpg
+stage-media/*.jpeg
+stage-media/*.gif
+stage-media/*.pdf
