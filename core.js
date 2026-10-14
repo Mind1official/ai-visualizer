@@ -1201,7 +1201,7 @@ const AV = (() => {
   // strip along the top edge, and without this the lists would sit under it.
   let panelWrap = null, panelSig = "", panelsHidden = false;
 
-  const PANEL_TITLES = { now: "WORKING ON NOW", todo: "TO DO" };
+  const PANEL_TITLES = { now: "WORKING ON NOW", todo: "TO DO", drones: "DRONES" };
 
   function panelsBuild() {
     panelWrap = document.createElement("div");
@@ -1269,12 +1269,15 @@ const AV = (() => {
   function panelsRender(data) {
     // Signature guard, same reason as the stage: rebuilding every poll would
     // fight anything the person is mid-scroll on.
-    const sig = JSON.stringify([data.now || [], data.todo || []]);
+    const sig = JSON.stringify([data.now || [], data.todo || [], data.drones || []]);
     if (sig === panelSig) return;
     panelSig = sig;
     if (!panelWrap) panelsBuild();
     panelWrap.textContent = "";
-    for (const key of ["now", "todo"]) {
+    // DRONES LAST, under the standing lists: they come and go, and a panel
+    // that appears above the to-do list would shove it down the screen every
+    // time a question went out.
+    for (const key of ["now", "todo", "drones"]) {
       const items = data[key] || [];
       if (!items.length) continue;      // an empty list draws nothing at all
       panelWrap.appendChild(panelCard(key, items));

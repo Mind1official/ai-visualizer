@@ -515,9 +515,65 @@ def read_panels():
                               "text": str(it["text"])[:200],
                               "done": bool(it.get("done"))})
         out[k] = items
+    # The drones ride along: the face already polls this, and a second poll
+    # for a six-row panel would be a second poll for nothing.
+    out["drones"] = read_drones()
     out["ts"] = float(data.get("ts") or 0)
     return out
 
+
+
+# --- the drones panel --------------------------------------------------------
+# Mind, 2026-10-14: "When a drone is sent open a card with live reporting of
+# what the drones are doing so I can see what they are working on in real
+# time" -- and then "have the drone card look like the to-do cards, size and
+# text matching, off to a sided."
+#
+# So it is a THIRD CARD IN THE SAME TOP-RIGHT STACK rather than a stage card:
+# identical chrome, identical monospace rows, same width, already parked out
+# of the way. One row per drone, updated in place as its seconds tick.
+#
+# IN MEMORY, NOT ON DISK, and that is the difference from the lists. The lists
+# are a standing record that must survive a restart; a drone is something
+# happening right now, and a drone row that outlived the process behind it
+# would be a lie. A restart has no drones running, so it should show none.
+#
+# ENTRIES EXPIRE. A finished row lingers just long enough to read; a row that
+# stops reporting -- a killed process, a crash -- goes rather than sitting at
+# "waiting" forever, which reads as work in progress.
+DRONES = {}
+DRONE_DONE_TTL_S = 90      # long enough to read the answer, short enough to go
+DRONE_STALE_TTL_S = 20     # the ticker reports every 2s, so this is generous
+DRONE_MAX = 6
+
+
+def read_drones():
+    now = time.time()
+    rows = []
+    for key, d in sorted(DRONES.items(), key=lambda kv: kv[1]["at"]):
+        ttl = DRONE_DONE_TTL_S if d["done"] else DRONE_STALE_TTL_S
+        if now - d["at"] > ttl:
+            continue
+        rows.append({"id": key, "text": d["text"], "done": d["done"]})
+    return rows[-DRONE_MAX:]
+
+
+def drones_action(body):
+    """Upsert one drone's row. `done` ticks it; the row expires by itself."""
+    key = str(body.get("id") or "").strip()
+    if not key:
+        raise ValueError("a drone row needs an id")
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise ValueError("a drone row needs text")
+    DRONES[key] = {"text": text[:200], "done": bool(body.get("done")),
+                   "at": time.time()}
+    # Pruned on write as well as on read, so a long-lived server does not
+    # accumulate a dictionary of dead drones nobody asks for.
+    for dead in [k for k, d in DRONES.items()
+                 if time.time() - d["at"] > max(DRONE_DONE_TTL_S, DRONE_STALE_TTL_S)]:
+        DRONES.pop(dead, None)
+    return {"ok": True, "drones": read_drones()}
 
 def write_panels(panels):
     panels["ts"] = time.time()
@@ -683,6 +739,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/panels":
             self._post_json(panels_action, "panels")
+        elif route == "/drones":
+            self._post_json(drones_action, "drones")
             return
         if route != "/say":
             self._send(b"not found", "text/plain", 404)
