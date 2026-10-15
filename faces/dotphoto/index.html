@@ -219,6 +219,24 @@ const JAW_CURVE = 2.03;
 // iris. Mind caught it on the live face in one glance ("off a touch").
 const EYE_FRAC = 0.387, EYE_CFRAC = 0.500, EYE_SEP = 0.113;
 let EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
+// WHERE THE BROWS SIT. Measured on the same 5% grid: the brows run
+// about 0.30 to 0.325 down the picture, so their centre line is 0.312 --
+// a touch under a tenth of the picture above the eyes.
+//
+// Brows are worth more than they look. They are the only part of a face
+// that can contradict the mouth, which is most of what we read as
+// attitude; a face that talks with a dead brow is a puppet, however
+// good the jaw is.
+const BROW_FRAC = 0.312;
+let BROW_Y = (BROW_FRAC - 0.5) * FACE_H;
+// WHERE THE HEAD PIVOTS WHEN IT TILTS. The base of the neck, not the
+// chin -- tilting about anything higher slides the head sideways off
+// its own throat. The collarbones are at 0.88 on this picture.
+const NECK_FRAC = 0.88;
+let NECK_Y = (NECK_FRAC - 0.5) * FACE_H;
+// How far the head rolls at full lean, in radians. Tiny. Three degrees
+// is a gesture; ten is a bird looking at something.
+const TILT_MAX = 0.040;
 const EYE_CX = (EYE_CFRAC - 0.5) * FACE_W, EYE_DX = EYE_SEP * FACE_W;
 
 let IMG = null, IW = 0, IH = 0, LUM = null, ALPHA = null;
@@ -232,6 +250,8 @@ function loadSource(then) {
     CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
     HINGE_Y = (HINGE_FRAC - 0.5) * FACE_H;
     EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
+    BROW_Y = (BROW_FRAC - 0.5) * FACE_H;
+    NECK_Y = (NECK_FRAC - 0.5) * FACE_H;
     const off = document.createElement("canvas");
     off.width = IW; off.height = IH;
     const octx = off.getContext("2d", { willReadFrequently: true });
@@ -629,8 +649,39 @@ function build() {
         }
       }
 
+      // THE BROWS. Baked like the mouth and the eyes, and for the same
+      // reason: the picture is static, an eyebrow is not. `browSide`
+      // remembers which one, so a single brow can go up on its own --
+      // which is most of the character in the thing.
+      //
+      // Wider than the eye under it and shallower: a brow is a bar, not
+      // a blob, and a blob that lifts reads as the whole forehead
+      // sliding rather than a brow arching.
+      let brow = 0, browSide = 0;
+      if (on) {
+        const by = y - BROW_Y;
+        for (const sgn of [-1, 1]) {
+          const bx = x - (EYE_CX + sgn * EYE_DX);
+          const w = gauss(bx * bx, 0.135) * gauss(by * by, 0.050);
+          if (w > brow) { brow = w; browSide = sgn; }
+        }
+      }
+
+      // THE HEAD, as distinct from the neck -- which is the split Mind
+      // asked for, and the jawline cut is what made it cheap. Full
+      // weight above the jaw, falling away down the throat to nothing at
+      // the collarbones. The neck is NOT excluded: a real neck bends
+      // with the head, and a head that rolls on a rigid throat snaps off
+      // at the jaw. It simply bends less, the further down you go.
+      const head = on
+        ? (() => {
+            const u = Math.max(0, Math.min(1, (NECK_Y - y) / (NECK_Y - CHIN_Y)));
+            return u * u * (3 - 2 * u);
+          })()
+        : 0;
+
       dots.push({
-        px, py, h: on ? h : 0, on,
+        px, py, h: on ? h : 0, on, brow, browSide, head,
         lipU, lipL, hole, jaw, jdy, throat, eye, iris, eyeSide,
         gx, gy, g: Math.min(2.2, Math.hypot(gx, gy)),
         // A per-dot phase so the idle drift and the scatter never move
@@ -740,6 +791,13 @@ let gazeX = 0, gazeY = 0;         // where the eyes are actually pointed
 let gazeTX = 0, gazeTY = 0;       // where they are heading
 let gazeAt = 0.8;       // when the gaze next picks a new place to rest
 let heard = 0;          // a smoothed version of the mic, 0..1
+let browR = 0;          // how far the brows are up, 0..1 (negative = drawn down)
+let browSkew = 0;       // one brow higher than the other, -1..1
+let browAt = 2.5;       // when the next idle brow move fires
+let browHold = 0;       // seconds left holding the current brow pose
+let browTR = 0, browTS = 0;       // what the brows are heading for
+let talkT = 0;          // smoothed "is actually speaking", 0..1
+let leanA = 0;          // the head's roll, in radians
 let ringPhase = 0;      // how far the voice rings have travelled outward
 
 // MUSIC MODE. backtalk's ears already measure a 32-band spectrum of what
@@ -905,6 +963,56 @@ function frame(now) {
   // jaw falls open and is pulled shut.
   open += (wantOpen - open) * Math.min(1, dt / (wantOpen > open ? 78 : 135));
 
+  // SPEAKING, SMOOTHED. `state` flips instantly and the head is heavy;
+  // this is what the tilt and the brows lean on so they ease in and out
+  // of a sentence instead of snapping at the first and last syllable.
+  talkT += ((state === "speaking" ? 1 : 0) - talkT) * Math.min(1, dt / 420);
+
+  // THE BROWS.
+  //
+  // Two things drive them, and keeping them separate is the point. The
+  // fast one is EMPHASIS: brows go up on a loud syllable, which is the
+  // single most human thing a talking face does and costs one line. The
+  // slow one is a POSE -- a held raise, or one brow up -- fired on its
+  // own irregular clock the way the blink is, so the face has an opinion
+  // between sentences rather than only during them.
+  //
+  // A brow pose that lands and leaves instantly reads as a twitch, so
+  // each one is HELD for most of a second before it releases.
+  if (t > browAt) {
+    const r = Math.random();
+    // Mostly a small both-brow lift; now and then a proper one; and
+    // about a fifth of the time a single brow, which is the one that
+    // makes it look like she is thinking something she hasn't said.
+    browTR = r < 0.5 ? 0.30 : r < 0.8 ? 0.75 : 0.45;
+    browTS = r > 0.8 ? (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5) : 0;
+    // Listening gets more brow than talking does: while she is speaking
+    // the emphasis term is already moving them, and stacking a pose on
+    // top of it just looks startled.
+    if (state === "speaking") { browTR *= 0.35; browTS *= 0.35; }
+    browHold = 0.5 + Math.random() * 0.9;
+    browAt = t + 2.2 + Math.random() * 5.5;
+  }
+  if (browHold > 0) browHold -= dt / 1000;
+  else { browTR = 0; browTS = 0; }
+  // EMPHASIS rides on top of the pose, from the envelope's loud end
+  // only -- the whole range would have the brows pumping on every
+  // syllable, which is a cartoon.
+  const emph = state === "speaking" ? Math.max(0, e - 0.45) * 1.5 : 0;
+  browR += ((browTR + emph) - browR) * Math.min(1, dt / 150);
+  browSkew += (browTS - browSkew) * Math.min(1, dt / 220);
+
+  // THE HEAD TILTS.
+  //
+  // Two slow sines, deliberately out of step so the period never reads,
+  // scaled by how much she is actually talking -- a head that sways the
+  // same amount in silence is a bobblehead. It never fully stops,
+  // though: a completely still head between sentences is the thing that
+  // makes a face look switched off.
+  const wander = Math.sin(t * 0.31) * 0.62 + Math.sin(t * 0.53 + 2.1) * 0.38;
+  const wantLean = wander * TILT_MAX * (0.22 + 0.78 * talkT);
+  leanA += (wantLean - leanA) * Math.min(1, dt / 260);
+
   // BLINKING, ON AN IRREGULAR CLOCK. A blink on a fixed timer reads as a
   // metronome within about twenty seconds -- the eye is very good at
   // catching a period. So the gap is random between roughly two and seven
@@ -993,6 +1101,23 @@ function frame(now) {
 
   for (const d of dots) {
     let px = d.px, py = d.py;
+
+    // THE HEAD TILTS -- applied first, because it moves the whole head
+    // and everything after it (the jaw, the brows, the lids) is a
+    // movement OF the head, measured from wherever the head now is.
+    //
+    // A rotation about the base of the neck, by each dot's share of the
+    // angle. The weight does the anatomy: the skull takes all of it, the
+    // throat takes less the lower it goes, the shoulders take none. That
+    // falling weight IS the bend in the neck -- there is no second rig
+    // for it.
+    if (d.head > 0.002 && Math.abs(leanA) > 0.0004) {
+      const a2 = leanA * d.head;
+      const hx = px, hy = py - NECK_Y * scale;
+      const c2 = Math.cos(a2), s2 = Math.sin(a2);
+      px += hx * c2 - hy * s2 - hx;
+      py += hx * s2 + hy * c2 - hy;
+    }
 
     // Thinking: every dot wanders off its lattice point and comes back.
     if (scatter > 0.01) {
@@ -1124,6 +1249,21 @@ function frame(now) {
       h -= d.hole * open * 0.36;                              // the gap darkens
       h -= d.throat * open * 0.30;                            // and so does the throat
       h += (d.lipU + d.lipL) * open * 0.08;                   // lips catch light
+    }
+
+    // THE BROWS MOVE. Up is negative y. `browSkew` tips one against the
+    // other, so a single raised brow is the same rig rather than a
+    // second one -- the side a dot belongs to decides which way it goes.
+    //
+    // The lift is small on purpose: a brow travels a few millimetres on
+    // a real face and the eye is extremely sensitive to it. Anything
+    // large enough to be obviously moving is already too much.
+    if (d.brow > 0.004) {
+      const lift = browR + browSkew * d.browSide * 0.55;
+      py -= d.brow * lift * scale * 0.030;
+      // and the brow catches the key light as it rises, which is what
+      // stops it reading as a bar of dots sliding up the forehead.
+      h += d.brow * Math.max(0, lift) * 0.10;
     }
 
     // THE EYES CLOSE, AND THEY LOOK AROUND.
