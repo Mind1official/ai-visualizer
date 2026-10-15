@@ -140,8 +140,19 @@ let FACE_H = 1.44;
 // Where the mouth lands as a fraction down the image, converted into the
 // same face coordinates the rig uses. MEASURE THIS when swapping the
 // picture -- the jaw hinges on it.
-const MOUTH_FRAC = 0.632;
+const MOUTH_FRAC = 0.617;
 let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+// WHERE THE CHIN ENDS, as a fraction down the same image. MEASURE THIS
+// when swapping the picture, with the mouth: the jaw swings between the
+// two and must stop here. Leaving it out was the original bug -- the jaw
+// weight ramped downward with no bottom to it, so the NECK AND SHOULDERS
+// swung harder than the chin did, and every sentence rocked her whole
+// torso while the lower lip split off on its own (Mind, 2026-10-15:
+// "it just splits your bottom lip and moves your neck and shoulders").
+// Measured off a 10% grid drawn over source.png: the jawline lands at
+// 0.70, the collarbones at 0.88.
+const CHIN_FRAC = 0.70;
+let CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
 // WHERE THE EYES ARE. MEASURE THESE AGAIN when the picture changes --
 // the blink hinges on them the way the jaw hinges on MOUTH_Y.
 //
@@ -162,6 +173,7 @@ function loadSource(then) {
     IW = im.naturalWidth; IH = im.naturalHeight;
     FACE_H = FACE_W * (IH / IW);
     MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+    CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
     EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
     const off = document.createElement("canvas");
     off.width = IW; off.height = IH;
@@ -456,12 +468,52 @@ function build() {
       // carries how much it BELONGS to the mouth, and the renderer moves
       // it by that weight times the voice envelope.
       const my = y - MOUTH_Y;
-      const across = gauss(x * x, 0.34);              // nothing at the cheeks
-      const lipU = on ? across * gauss(Math.pow(my + 0.06, 2), 0.075) : 0;
-      const lipL = on ? across * gauss(Math.pow(my - 0.07, 2), 0.085) : 0;
-      const hole = on ? across * gauss(my * my, 0.055) : 0;
-      // The jaw: everything below the mouth swings, most of it at the chin.
-      const jaw = on ? Math.max(0, Math.min(1, (y - MOUTH_Y + 0.02) / 0.5)) : 0;
+      // HOW WIDE THE MOUTH IS. "Nothing at the cheeks" was wishful: at a
+      // sigma of 0.34 the lip bands still carried half their weight out
+      // at the cheekbones, so whatever the lips did was done by a stripe
+      // running the full width of the face. With the bands tightened
+      // vertically that stripe became a hard dark LINE across both cheeks
+      // (Mind's screenshot, 2026-10-15). The mouth is about a quarter of
+      // the picture wide; this is scaled to it.
+      const across = gauss(x * x, 0.10);
+      // THE LIPS ARE NARROW BANDS. They were not: at a sigma of 0.085
+      // the "lower lip" still carried 0.82 weight a long way ABOVE the
+      // mouth and 0.45 down at the chin -- a broad smear of face moving
+      // on its own profile while the jaw underneath moved on another.
+      // That mismatch IS the split Mind kept seeing (2026-10-15). A real
+      // lower lip is about five per cent of the picture tall, so the band
+      // is tightened to match and the jaw carries everything below it.
+      // Tight enough to be lips, soft enough to have an EDGE rather than
+      // a cut: under about 0.010 the band is thinner than the gap between
+      // dots, so it stops being a lip and becomes a one-dot seam.
+      const lipU = on ? across * gauss(Math.pow(my + 0.055, 2), 0.011) : 0;
+      const lipL = on ? across * gauss(Math.pow(my - 0.065, 2), 0.013) : 0;
+      const hole = on ? across * gauss(my * my, 0.016) : 0;
+      // THE JAW. A hinge, not a ramp. It opens from nothing at the mouth
+      // to full at the chin, then DIES just below it -- a real jaw ends
+      // at the jawline, and everything under that is neck, which does not
+      // move when you speak. The tail is short and soft rather than a
+      // hard cut, so the chin does not shear away from the throat.
+      // It tapers at the sides too: the jaw is widest at the chin and the
+      // shoulders are not part of it at any depth.
+      // IT HINGES AT THE UPPER LIP, not at the mouth's centre. Starting
+      // the ramp at the mouth left the skin directly under the lower lip
+      // moving at almost nothing while the lip itself moved a lot, and a
+      // lip that travels further than the chin it sits on tears away from
+      // it. Hinging a little higher and ramping LINEARLY puts the two
+      // within a few per cent of each other all the way down, so the
+      // whole lower face moves as one piece.
+      let jaw = 0;
+      if (on) {
+        const hinge = MOUTH_Y - 0.06;
+        const span = Math.max(0.01, CHIN_Y - hinge);
+        const below = y - hinge;
+        if (below > 0) {
+          const r = Math.min(1, below / span);
+          const tail = below <= span ? 1 : gauss(Math.pow(below - span, 2), 0.010);
+          jaw = r * tail * gauss(x * x, 0.42);
+        }
+      }
 
       // WHICH DOTS ARE THE EYES, baked for the same reason the mouth is:
       // the picture is static and a blink is not. `eye` is how much a dot
@@ -722,8 +774,21 @@ function frame(now) {
   // HOW FAR THE MOUTH IS OPEN. The envelope alone is too twitchy to read
   // as a jaw -- a jaw has mass -- so it chases the envelope, opening fast
   // and closing slower, which is also how a real one moves.
-  const wantOpen = state === "speaking" ? Math.min(1, env * 1.4) : 0;
-  open += (wantOpen - open) * Math.min(1, dt / (wantOpen > open ? 55 : 160));
+  // DON'T PEG. The envelope was multiplied by 1.4 and clamped, so
+  // anything louder than about seven tenths asked for a fully open mouth
+  // -- and across a long sentence that is most of it, which is why the
+  // jaw just hung there (Mind, 2026-10-15: "your mouth pegs open"). Under
+  // 1.0 it never saturates, so the top of the range stays available for
+  // the loud syllables instead of being spent on the ordinary ones.
+  // The curve matters more than the ceiling: squaring the quiet end
+  // keeps the mouth nearly shut between words and lets it travel on the
+  // vowels, which is where the read comes from.
+  const e = Math.min(1, env * 0.95);
+  const wantOpen = state === "speaking" ? e * (0.35 + 0.65 * e) : 0;
+  // And a softer chase on the way in, so a syllable lands as a swing
+  // rather than a snap; the close stays quicker than the open, because a
+  // jaw falls open and is pulled shut.
+  open += (wantOpen - open) * Math.min(1, dt / (wantOpen > open ? 78 : 135));
 
   // BLINKING, ON AN IRREGULAR CLOCK. A blink on a fixed timer reads as a
   // metronome within about twenty seconds -- the eye is very good at
@@ -897,9 +962,19 @@ function frame(now) {
     // it is darker than its edges, not because anything draws one.
     let h = d.h;
     if (open > 0.01) {
-      const gap = open * scale * 0.060;
-      py += (d.lipL * 0.55 + d.jaw * d.jaw * 0.90) * gap;    // lower lip, jaw
-      py -= d.lipU * 0.32 * gap;                              // upper lip
+      const gap = open * scale * 0.094;
+      // The jaw is already squared in the mask, so it is used STRAIGHT
+      // here -- squaring it twice was what left the chin almost still
+      // while the lower lip slid off it on its own.
+      // The lip rides the jaw rather than moving beside it: its own
+      // travel is small and added on top of whatever the jaw under it is
+      // already doing, which is how a mouth opens.
+      // The lip's own travel is now a TOPPING on the jaw's, not a rival
+      // to it: 0.30 against the jaw's 1.0, which is what gives the lower
+      // lip its curl without letting it leave the chin behind.
+      const swing = d.jaw * gap;
+      py += swing + d.lipL * 0.30 * gap;                      // jaw, lower lip
+      py -= d.lipU * 0.16 * gap;                              // upper lip
       h -= d.hole * open * 0.36;                              // the gap darkens
       h += (d.lipU + d.lipL) * open * 0.08;                   // lips catch light
     }
