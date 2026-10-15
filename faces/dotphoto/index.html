@@ -289,12 +289,31 @@ const STEP = 5;              // pixels between dots at 1x. Finer than the
                              // hand-built Mask: a photograph carries detail
                              // worth resolving, where a gaussian dome did not.
 
+// ONE SIZE CONSTANT, USED BY BOTH ENDS. The lattice is laid out ONCE at
+// build time against `scale`, and the frame loop recomputes `scale` every
+// frame -- so for a while these were two different numbers, and changing
+// the one in the frame loop moved the spikes and nothing else. The face
+// rendered at exactly the same size however it was "resized", which is a
+// maddening thing to look at while being told it has changed.
+function faceScale() {
+  const top = (typeof topInset === "function") ? topInset() : 0;
+  const bot = (typeof chromeInset === "function") ? chromeInset() : 0;
+  const usable = Math.max(120, H - top - bot);
+  return { scale: Math.min(W * SIZE_W, usable * SIZE_H),
+           cy: top + usable / 2 };
+}
+
+const SIZE_W = 0.34, SIZE_H = 0.38;   // how much of the window the head fills
+
 function build() {
   dots = [];
   if (!LUM) return;            // the first call lands before the photo does
-  scale = Math.min(W, H) * 0.42;
-  cx = W / 2; cy = H / 2;
-  const step = Math.max(9, STEP * (Math.min(W, H) / 900));
+  const fit = faceScale();
+  scale = fit.scale;
+  cx = W / 2; cy = fit.cy;
+  // The floor is what the canvas can actually draw, not a tuning choice;
+  // it was 9, which silently clamped away every density change below it.
+  const step = Math.max(4, STEP * (Math.min(W, H) / 900));
   // A WIDER STENCIL than the hand-built field wanted. The photo carries
   // detail far below the dot spacing, and sampling it tightly measures
   // skin texture rather than the shape of the face.
@@ -363,11 +382,14 @@ let open = 0;           // speaking: how far the mouth is open, 0..1
 // Mind asked for. The insets come from the shared HUD and change as the
 // transcript grows, so this is read every frame rather than at build.
 function fitBetweenPanels() {
-  const top = (typeof topInset === "function") ? topInset() : 0;
-  const bot = (typeof chromeInset === "function") ? chromeInset() : 0;
-  const usable = Math.max(120, H - top - bot);
-  cy = top + usable / 2;
-  scale = Math.min(W * 0.36, usable * 0.40);
+  const fit = faceScale();
+  cy = fit.cy;
+  // REBUILD WHEN THE SIZE REALLY MOVES. The lattice is baked against the
+  // scale it was built with, so drifting `scale` underneath it stretches
+  // the pushes and leaves the face itself alone. The transcript grows by
+  // a line at a time, so a 4% threshold keeps this off the hot path.
+  if (Math.abs(fit.scale - scale) > scale * 0.04) build();
+  scale = fit.scale;
 }
 
 function frame(now) {
