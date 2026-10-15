@@ -635,6 +635,7 @@ let open = 0;           // speaking: how far the mouth is open, 0..1
 // was doing the whole job, which is backwards from how anyone reads a
 // face. Nobody notices mouth accuracy; everybody notices dead eyes.
 let blink = 0;          // 0 open, 1 shut
+let blinkHold = 0;      // seconds left at fully shut before the lid opens
 let blinkAt = 1.2;      // when the next one fires, in seconds on t
 let gazeX = 0, gazeY = 0;         // where the eyes are actually pointed
 let gazeTX = 0, gazeTY = 0;       // where they are heading
@@ -799,8 +800,15 @@ function frame(now) {
     blink = 1;
     blinkAt = t + 2.0 + Math.random() * 5.0;
     if (Math.random() < 0.18) blinkAt = t + 0.22;   // the occasional double
+    blinkHold = 0.055;                              // shut, briefly, before it opens
   }
-  blink += (0 - blink) * Math.min(1, dt / 95);
+  // A REAL LID SHUTS, STAYS SHUT A MOMENT, THEN OPENS. The first version
+  // started decaying the same frame it fired, so at sixty hertz the whole
+  // blink was over in a handful of frames and read as a flicker rather
+  // than an eye closing -- Mind could barely see it. The hold is what
+  // makes it legible; the slower open is what makes it a lid.
+  if (blinkHold > 0) blinkHold -= dt / 1000;
+  else blink += (0 - blink) * Math.min(1, dt / 165);
 
   // GAZE DRIFT. A face that holds one stare is a photograph; a face whose
   // eyes settle somewhere new every few seconds is somebody thinking. It
@@ -987,7 +995,10 @@ function frame(now) {
     // brightness of the skin around them erases the eye for a moment,
     // which is exactly what a closed lid looks like. Nothing is added to
     // the scene; a feature is briefly taken out of it.
-    if (blink > 0.01) h += d.eye * blink * 0.42;
+    // Brighter as well as longer: the socket has to come UP to the skin
+    // around it, and at 0.42 it only came half way, so the eye dimmed
+    // rather than closed.
+    if (blink > 0.01) h += d.eye * blink * 0.66;
     // The gaze slides the iris's dots sideways within the socket. Only a
     // few pixels -- it is a long way under the dot spacing, so the
     // lattice holds and the likeness with it, and the dark core moving
