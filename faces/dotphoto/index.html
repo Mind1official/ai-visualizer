@@ -209,6 +209,42 @@ const JAW_SWING = 0.17;
 // Measured off the 5% grid: the jawline meets the ear at 0.28 across and
 // 0.43 down, the chin at 0.50 / 0.725.
 const JAW_CURVE = 2.03;
+// AND THE TOP EDGE OF THE SAME BONE -- the ramus, running up from the
+// lip seam at the centre to the hinge in front of the ear.
+//
+// This started as a horizontal line a little ABOVE the lip seam, and
+// that was wrong in the one place it shows: it put the upper lip inside
+// the jaw. The upper lip belongs to the SKULL. Dragging it down with
+// the mandible meant the gap opened below the seam instead of at it --
+// Mind drew the line on a screenshot (2026-10-15) and the split was
+// sitting a couple of per cent under it.
+//
+// Curving it also fixes the sides for free. Bounded by a horizontal
+// line, the band pinched to nothing out by the ears, because the
+// JAWLINE has climbed to meet it there; both edges rising together
+// keeps the band roughly even all the way round, which is what a
+// mandible actually is.
+//   1.907 = (MOUTH_Y - HINGE_Y) / XJ^2, with XJ the jawline's own
+//   endpoint at 0.28 across -- so the two curves MEET at the hinge.
+const JAW_TOP_CURVE = 1.907;
+// How fast the jaw takes hold just under the seam. The mandible is one
+// rigid bone: the lower lip, the chin and the jawline all travel
+// TOGETHER, so this is a short blend across the lips' own thickness and
+// then full weight, not a ramp down the length of the face. A ramp is
+// what made the chin lag its own lip in the first place.
+const JAW_GRIP = 0.055;
+// ...but ONLY at the lips. That same top edge runs on out across the
+// cheek to the ear, and a blend that short turns it into a CREASE --
+// two hard diagonals from beside the nose down to the jaw, which is
+// exactly what Mind's next screenshot showed (2026-10-15). At the lips
+// a sharp edge is correct, because there IS one there; on a cheek
+// there is nothing but skin, and any edge at all is a fold that should
+// not exist.
+//
+// So the blend widens with distance from the centre line: a lip's
+// thickness at the mouth, most of the band's width out by the ear.
+// Same curve family as the two edges, so it never fights them.
+const JAW_GRIP_SPREAD = 1.20;
 // WHERE THE EYES ARE. MEASURE THESE AGAIN when the picture changes --
 // the blink hinges on them the way the jaw hinges on MOUTH_Y.
 //
@@ -584,22 +620,21 @@ function build() {
       // upper lip down to it belongs to the jaw; everything under it is
       // throat, and holds still.
       const yJaw = CHIN_Y - JAW_CURVE * x * x;
+      // ...and where its top edge runs. Above this is skull.
+      const yTop = MOUTH_Y - JAW_TOP_CURVE * x * x;
       let jaw = 0;
       if (on) {
-        const hinge = MOUTH_Y - 0.12;
-        const span = yJaw - hinge;
-        const below = y - hinge;
-        // Where the curve has climbed to meet the ramp -- out at the
-        // ears -- the band is a sliver, and a sliver going from nothing
-        // to full travel in two dots is a tear. Fade the whole column
-        // out as it narrows, so the jaw thins away towards the hinge
-        // instead of ending on an edge. Normalise against the band's
-        // width near the ANGLE of the jaw, not its width at the chin --
-        // against the latter the fade never reached full even at the
-        // chin, and the whole jaw moved at four fifths strength.
-        const narrow = Math.max(0, Math.min(1, span / 0.30));
+        const span = yJaw - yTop;
+        const below = y - yTop;
+        // No side taper by hand any more, and none is wanted: the
+        // SWING does it. A dot out by the ear sits level with the hinge,
+        // so its lever arm is nothing and it cannot move however much
+        // weight it carries. Fading it as well was tuning the same
+        // taper twice, in two places, against each other.
         if (below > 0 && span > 0.01) {
-          const r = Math.min(1, below / span) * narrow * narrow * (3 - 2 * narrow);
+          const grip = JAW_GRIP + JAW_GRIP_SPREAD * x * x;
+          const u = Math.min(1, below / grip);
+          const r = u * u * (3 - 2 * u);
           // The fall-off below the chin: a jaw ends, but it does not end
           // in a cliff -- the soft tissue under it follows a little. At a
           // sigma of 0.010 this was down to a seventh of its weight two
@@ -1224,12 +1259,15 @@ function frame(now) {
       // The jaw is already squared in the mask, so it is used STRAIGHT
       // here -- squaring it twice was what left the chin almost still
       // while the lower lip slid off it on its own.
-      // The lip rides the jaw rather than moving beside it: its own
-      // travel is small and added on top of whatever the jaw under it is
-      // already doing, which is how a mouth opens.
-      // The lip's own travel is now a TOPPING on the jaw's, not a rival
-      // to it: 0.30 against the jaw's 1.0, which is what gives the lower
-      // lip its curl without letting it leave the chin behind.
+      // THE LOWER LIP HAS NO TRAVEL OF ITS OWN ANY MORE, and that is a
+      // fix, not a loss. It used to add 0.30 on top of the jaw to stop
+      // it lagging a chin that moved on a ramp -- but the mandible is
+      // rigid now, lip and chin alike, so the extra is pure DIFFERENTIAL
+      // between neighbouring dots. A differential is a stretch, and a
+      // stretch smears whatever the photograph baked into that strip:
+      // the shadow under the lip and the crease above the chin, which
+      // are exactly the "two lines caught in the stretch" Mind saw
+      // (2026-10-15). The bone carries the lip now. Nothing to add.
       // THE SWING. Each dot rotates about the hinge by its own share of
       // the full angle, so the ramp still decides who moves: nothing at
       // the hinge, everything at the chin, zero past the jawline.
@@ -1244,7 +1282,7 @@ function frame(now) {
       // a rotated jaw look like it is on a hinge made of rubber.
       const ang = d.jaw * open * JAW_SWING;
       py += d.jdy * ((Math.cos(ang) - 1) + JAW_DEPTH * Math.sin(ang)) * scale;
-      py += d.lipL * 0.30 * gap;                              // lower lip rides it
+      // The lower lip just rides the jaw -- see above.
       py -= d.lipU * 0.16 * gap;                              // upper lip
       h -= d.hole * open * 0.36;                              // the gap darkens
       h -= d.throat * open * 0.30;                            // and so does the throat
