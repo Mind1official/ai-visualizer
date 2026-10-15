@@ -129,7 +129,7 @@ let FACE_H = 1.44;
 // Where the mouth lands as a fraction down the image, converted into the
 // same face coordinates the rig uses. MEASURE THIS when swapping the
 // picture -- the jaw hinges on it.
-const MOUTH_FRAC = 0.743;
+const MOUTH_FRAC = 0.632;
 let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
 // WHERE THE EYES ARE. MEASURE THESE AGAIN when the picture changes --
 // the blink hinges on them the way the jaw hinges on MOUTH_Y.
@@ -139,7 +139,7 @@ let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
 // version -- "take the darkest band across the upper half" -- put them
 // on the eyelids, because lashes and a strong brow are darker than an
 // iris. Mind caught it on the live face in one glance ("off a touch").
-const EYE_FRAC = 0.481, EYE_CFRAC = 0.491, EYE_SEP = 0.126;
+const EYE_FRAC = 0.387, EYE_CFRAC = 0.500, EYE_SEP = 0.113;
 let EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
 const EYE_CX = (EYE_CFRAC - 0.5) * FACE_W, EYE_DX = EYE_SEP * FACE_W;
 
