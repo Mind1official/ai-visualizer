@@ -1101,7 +1101,10 @@ function frame(now) {
                 * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
       const n = Math.hypot(d.gx, d.gy) || 1;
       const ux = -(d.gx / n) * L, uy = -(d.gy / n) * L;
-      const steps = L > scale * 0.030 ? 3 : 2;
+      // HALVED 2026-10-15 to see what the shading actually buys: three
+      // steps and two became two and one. The run still steps down the
+      // gradient, with half the dots drawn to do it.
+      const steps = L > scale * 0.030 ? 2 : 1;
       for (let i = 1; i <= steps; i++) {
         const f = i / steps;
         // each step out is dimmer and smaller, so the run fades into the
