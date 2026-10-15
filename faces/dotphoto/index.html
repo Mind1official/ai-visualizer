@@ -150,9 +150,65 @@ let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
 // torso while the lower lip split off on its own (Mind, 2026-10-15:
 // "it just splits your bottom lip and moves your neck and shoulders").
 // Measured off a 10% grid drawn over source.png: the jawline lands at
-// 0.70, the collarbones at 0.88.
-const CHIN_FRAC = 0.70;
+// 0.70, the collarbones at 0.88. CORRECTED 2026-10-15: 0.70 is the chin
+// CREASE, not the bottom edge of the chin -- the chin pad runs on to
+// about 0.725. Cutting the hinge at the crease left the lowest band of
+// chin inside the dying tail, so it barely travelled while the lip above
+// it travelled fully (Mind, 2026-10-15: "the bottom part of your chin
+// does not move"). Measure the EDGE, not the shadow above it.
+const CHIN_FRAC = 0.725;
 let CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
+// WHERE THE JAW HINGES. Not a guess and not the mouth: the mandible
+// pivots on the condyles, which sit just in front of the ear holes,
+// roughly level with the bottom of the nose bridge. Measure it on the
+// picture as the point in front of the ear where the jawline starts.
+//
+// 0.34 is the ear canal on this portrait -- the ear runs 0.26 to 0.40
+// down the picture and the condyle sits level with the middle of it.
+//
+// This matters because a jaw does not SLIDE down, it SWINGS, and the
+// difference is visible. Sliding moves the corners of the mouth as far
+// as the chin; swinging barely moves them, because they sit close to
+// the hinge. That is why the old translation read as a mouth being
+// stretched open rather than a jaw dropping.
+const HINGE_FRAC = 0.34;
+let HINGE_Y = (HINGE_FRAC - 0.5) * FACE_H;
+// HOW FAR THE CHIN SITS FORWARD OF THE HINGE, as a multiple of how far
+// it sits BELOW it. This is the whole trick. Seen from the front, a
+// rotation about a left-right axis would SHORTEN the jaw and pull the
+// chin UP -- `cos a` is less than one -- and the only reason a real
+// chin drops instead is that it is well forward of the hinge, so the
+// swing carries it downward through `sin a`. Drop the depth and the
+// face pulls its own chin into its mouth.
+// MEASURED, not guessed, and the number is bigger than it looks like it
+// should be: on a side view the condyle sits at the BACK of the skull by
+// the ear and the chin at the very front, so the chin is further forward
+// of the hinge than it is below it once you account for how little of
+// the picture the head's height covers. At 0.30 the jaw barely dropped
+// at all -- the swing went backwards instead of downwards, which is
+// geometrically correct for a chin hanging straight under its hinge and
+// anatomically nonsense.
+const JAW_DEPTH = 0.57;
+// How far it opens at full voice, in radians. A human jaw manages about
+// 30 degrees; speech uses well under half of that.
+const JAW_SWING = 0.17;
+// THE JAWLINE ITSELF, as a parabola. Mind drew it straight onto a
+// screenshot (2026-10-15) -- a U from just in front of one ear, round
+// under the chin, up to the other -- and asked why the cut wasn't on it.
+// It wasn't, because the mask was a horizontal BAND with a gaussian
+// taper at the sides, so the jaw ended on a level line across the neck
+// and a straight slice is exactly what that draws.
+//
+// Now the cut follows the bone. Under any column x the jaw ends at
+//     CHIN_Y - JAW_CURVE * x * x
+// which is the chin at the centre and climbs to the hinge at the ears.
+// The side taper falls out of it for free: past the ears the curve has
+// risen above the top of the ramp, so there is no jaw there to move and
+// nothing to fade out by hand.
+//
+// Measured off the 5% grid: the jawline meets the ear at 0.28 across and
+// 0.43 down, the chin at 0.50 / 0.725.
+const JAW_CURVE = 2.03;
 // WHERE THE EYES ARE. MEASURE THESE AGAIN when the picture changes --
 // the blink hinges on them the way the jaw hinges on MOUTH_Y.
 //
@@ -174,6 +230,7 @@ function loadSource(then) {
     FACE_H = FACE_W * (IH / IW);
     MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
     CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
+    HINGE_Y = (HINGE_FRAC - 0.5) * FACE_H;
     EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
     const off = document.createElement("canvas");
     off.width = IW; off.height = IH;
@@ -503,17 +560,57 @@ function build() {
       // it. Hinging a little higher and ramping LINEARLY puts the two
       // within a few per cent of each other all the way down, so the
       // whole lower face moves as one piece.
+      // Where the jawline runs under THIS column. Everything from the
+      // upper lip down to it belongs to the jaw; everything under it is
+      // throat, and holds still.
+      const yJaw = CHIN_Y - JAW_CURVE * x * x;
       let jaw = 0;
       if (on) {
-        const hinge = MOUTH_Y - 0.06;
-        const span = Math.max(0.01, CHIN_Y - hinge);
+        const hinge = MOUTH_Y - 0.12;
+        const span = yJaw - hinge;
         const below = y - hinge;
-        if (below > 0) {
-          const r = Math.min(1, below / span);
-          const tail = below <= span ? 1 : gauss(Math.pow(below - span, 2), 0.010);
-          jaw = r * tail * gauss(x * x, 0.42);
+        // Where the curve has climbed to meet the ramp -- out at the
+        // ears -- the band is a sliver, and a sliver going from nothing
+        // to full travel in two dots is a tear. Fade the whole column
+        // out as it narrows, so the jaw thins away towards the hinge
+        // instead of ending on an edge. Normalise against the band's
+        // width near the ANGLE of the jaw, not its width at the chin --
+        // against the latter the fade never reached full even at the
+        // chin, and the whole jaw moved at four fifths strength.
+        const narrow = Math.max(0, Math.min(1, span / 0.30));
+        if (below > 0 && span > 0.01) {
+          const r = Math.min(1, below / span) * narrow * narrow * (3 - 2 * narrow);
+          // The fall-off below the chin: a jaw ends, but it does not end
+          // in a cliff -- the soft tissue under it follows a little. At a
+          // sigma of 0.010 this was down to a seventh of its weight two
+          // per cent of the picture below the jawline -- about a dot --
+          // which read as the chin being switched off rather than fading
+          // into the throat. Note the sigma is a STANDARD DEVIATION, so a
+          // WIDER tail is a BIGGER number; 0.025 carries it over about a
+          // finger's width of throat.
+          const tail = below <= span ? 1 : gauss(Math.pow(below - span, 2), 0.075);
+          jaw = r * tail;
         }
       }
+
+      // THE LEVER ARM. How far this dot sits below the hinge, which is
+      // what the swing rotates it around. Zero off the jaw, so the neck
+      // and the shoulders are untouched no matter how wide she opens.
+      const jdy = jaw > 0 ? y - HINGE_Y : 0;
+
+      // THE SHADOW UNDER THE CHIN. When the jaw swings away from the
+      // throat it opens a space, and a space in a photograph is DARK.
+      // Without this the static neck dots just sit there at full
+      // brightness behind the moving chin, which is what stopped the
+      // movement from reading even when the chin was travelling
+      // properly -- nothing got darker, so nothing looked like it had
+      // moved. (Mind, 2026-10-15, on separating head and neck: this is
+      // what he was actually reaching for.)
+      // It follows the same curve: the hollow that opens is the strip
+      // just under the jawline, not a horizontal bar across the neck.
+      const throat = on
+        ? gauss(Math.pow(y - (yJaw + 0.14), 2), 0.11) * gauss(x * x, 0.55)
+        : 0;
 
       // WHICH DOTS ARE THE EYES, baked for the same reason the mouth is:
       // the picture is static and a blink is not. `eye` is how much a dot
@@ -534,7 +631,7 @@ function build() {
 
       dots.push({
         px, py, h: on ? h : 0, on,
-        lipU, lipL, hole, jaw, eye, iris, eyeSide,
+        lipU, lipL, hole, jaw, jdy, throat, eye, iris, eyeSide,
         gx, gy, g: Math.min(2.2, Math.hypot(gx, gy)),
         // A per-dot phase so the idle drift and the scatter never move
         // as one slab.
@@ -1008,10 +1105,24 @@ function frame(now) {
       // The lip's own travel is now a TOPPING on the jaw's, not a rival
       // to it: 0.30 against the jaw's 1.0, which is what gives the lower
       // lip its curl without letting it leave the chin behind.
-      const swing = d.jaw * gap;
-      py += swing + d.lipL * 0.30 * gap;                      // jaw, lower lip
+      // THE SWING. Each dot rotates about the hinge by its own share of
+      // the full angle, so the ramp still decides who moves: nothing at
+      // the hinge, everything at the chin, zero past the jawline.
+      //
+      // Projected to the front, a point `jdy` below the hinge and
+      // `JAW_DEPTH * jdy` forward of it lands at
+      //     jdy * cos a + depth * sin a
+      // and the displacement is the difference from where it started.
+      // The `cos a - 1` term is NEGATIVE -- the foreshortening that
+      // shortens the jaw as it swings under -- and the depth term is
+      // what overcomes it. Keep both: dropping the first is what makes
+      // a rotated jaw look like it is on a hinge made of rubber.
+      const ang = d.jaw * open * JAW_SWING;
+      py += d.jdy * ((Math.cos(ang) - 1) + JAW_DEPTH * Math.sin(ang)) * scale;
+      py += d.lipL * 0.30 * gap;                              // lower lip rides it
       py -= d.lipU * 0.16 * gap;                              // upper lip
       h -= d.hole * open * 0.36;                              // the gap darkens
+      h -= d.throat * open * 0.30;                            // and so does the throat
       h += (d.lipU + d.lipL) * open * 0.08;                   // lips catch light
     }
 
