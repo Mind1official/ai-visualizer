@@ -551,6 +551,8 @@ function build() {
 /* ------------------------------ the render ------------------------------- */
 
 const CRIMSON = [182, 2, 50];
+/** The page's own background, for anything that has to be read ON the face. */
+const BACKDROP = [7, 4, 5];
 const HOT = [255, 140, 170];
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
@@ -657,6 +659,20 @@ let ringPhase = 0;      // how far the voice rings have travelled outward
 const BANDS = 32;
 const musicMags = new Float32Array(BANDS);
 let musicT = 0;         // 0 = voice face, 1 = fully in music mode
+/**
+ * COMPACTING, AS SOMETHING YOU CAN SEE (Mind, 2026-10-15).
+ *
+ * Compaction is the one long pause where nothing is wrong and nothing
+ * is happening: the face sits idle for a minute and reads as frozen. So
+ * a band of light travels up the portrait and the dots it crosses are
+ * pulled toward the centre and lit -- the picture visibly being gathered
+ * up and condensed, which is what is actually going on inside.
+ *
+ * SMOOTHED, NOT SWITCHED, so it arrives and leaves rather than
+ * appearing. The band's own travel is on the frame clock, independent of
+ * it, so the sweep is already mid-stroke when the glow comes up.
+ */
+let compactT = 0;
 let bass = 0, kick = 0; // smoothed low end, and the transient off it
 let spin = 0;           // the corona turns, slowly, and faster on the kick
 
@@ -688,6 +704,7 @@ function readBands(dt) {
   kick = Math.max(kick - dt / 260, Math.max(0, bass - prev) * 6);
   kick = Math.min(1, kick);
   musicT += ((live ? 1 : 0) - musicT) * Math.min(1, dt / 420);
+  compactT += ((AV.compacting ? 1 : 0) - compactT) * Math.min(1, dt / 500);
   spin += (dt / 1000) * (0.05 + 0.9 * bass);
 }
 
@@ -859,6 +876,9 @@ function frame(now) {
   // right now, do I need to restart something?" -- which is the worst
   // thing a live face can look like. This is what says it is running.
   const waveY = (t * 0.22) % 2 - 0.5;
+  /* The compaction band, bottom to top, a little over a second a pass.
+     Same normalised space as the breath wave, so it reads at any size. */
+  const compactY = compactT > 0.01 ? 0.9 - ((t * 0.8) % 1) * 1.9 : -99;
   const push = scale * (0.012 + 0.014 * present + 0.030 * env);
   // TAILS, SHORTER WHEN SPEAKING. The voice term used to be the biggest
   // of the three, so every syllable threw hair off the whole head and the
@@ -1037,8 +1057,15 @@ function frame(now) {
   // a face listening to it. Anything larger reads as a bouncing photo.
   const k = (1 + lift * 0.05) * (1 + idleBreath * 0.011)
             * (1 + musicT * (0.012 * bass + 0.016 * kick));
-    const x = cx + px * k + (px / scale) * push * lift;
-    const y = cy + py * k + (py / scale) * push * lift;
+    /* THE COMPACTION BAND. A dot inside it is pulled toward the centre
+       and lit -- a stripe of the picture being gathered in, travelling
+       up the face. The pull is small: this is the portrait, and a dot
+       that leaves its pixel takes the likeness with it. */
+    const cb = compactT > 0.01
+      ? compactT * Math.exp(-Math.pow((d.py / scale) - compactY, 2) / 0.012) : 0;
+    const gather = 1 - cb * 0.085;
+    const x = cx + (px * k) * gather + (px / scale) * push * lift;
+    const y = cy + (py * k) * gather + (py / scale) * push * lift;
 
     // Brightness across the face's OWN depth range, not an absolute
     // scale. The first version saturated: every dot above a low height
@@ -1070,9 +1097,9 @@ function frame(now) {
     // the reference, dark areas carry almost no dots and lit ones carry
     // big bright ones. A uniform dot over the whole face reads as a
     // blob however well it is sampled.
-    const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF) * d.edge;
+    const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF + cb * 0.55) * d.edge;
     const col = mix(CRIMSON, HOT,
-    Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick)));
+    Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick) + cb * 0.85));
     // The rim's dots shrink as well as dim. Fading alone leaves a ring
     // of full-sized ghosts and still reads as a cut line.
     // The radius comes off the GEOMETRIC height, so a closing lid does
@@ -1129,6 +1156,8 @@ function frame(now) {
   // knowing anything about the HUD.
   document.body.classList.toggle("music", musicT > 0.05);
 
+  drawChips(t);
+
   // An alert turns the whole field cold-hot: the one thing that must not
   // be subtle.
   if (AV.alert) {
@@ -1138,6 +1167,102 @@ function frame(now) {
   }
 
   requestAnimationFrame(frame);
+}
+
+/**
+ * THE STATUS CHIPS (Mind, 2026-10-15).
+ *
+ * Three states change what the voice line will DO, and none of them used
+ * to show on this face: compacting (she is busy and will be slow),
+ * music mode (nothing is being transcribed), answer-only (the mic
+ * ignores anything that does not say her name). A person glancing at the
+ * screen should be able to tell why she is not answering.
+ *
+ * DRAWN ON THE CANVAS, not added to the HUD, for two reasons: the HUD
+ * fades out in music mode -- which is exactly when one of these needs to
+ * be legible -- and a chip in the canvas cannot shift the layout the
+ * face's centre is fitted against.
+ *
+ * ONE ROW, CENTRED JUST ABOVE THE TRANSCRIPT (Mind's placement). The
+ * first pass drew them along the bottom, where the chat runs, and a chip
+ * under a wall of text is a chip nobody sees -- "I did not see a chip".
+ * So the row is MEASURED off the transcript panel rather than guessed
+ * from the window: the panel moves with the chat's own layout, and a
+ * fixed offset would drift the moment it did.
+ *
+ * In music mode the transcript fades to nothing but keeps its box, which
+ * is what holds this row still while the chat disappears underneath it.
+ *
+ * They fade with their own state rather than popping, so a chip
+ * arriving is not mistaken for something flashing.
+ */
+const chipFade = { compacting: 0, music: 0, answer: 0 };
+
+function drawChips(t) {
+  const want = {
+    compacting: AV.compacting ? 1 : 0,
+    music: musicT > 0.5 ? 1 : 0,
+    answer: AV.answerOnly ? 1 : 0,
+  };
+  const labels = {
+    compacting: "COMPACTING",
+    music: "MUSIC MODE",
+    answer: "ANSWER ONLY",
+  };
+  const live = [];
+  for (const k of ["compacting", "music", "answer"]) {
+    chipFade[k] += (want[k] - chipFade[k]) * 0.08;
+    if (chipFade[k] > 0.02) live.push(k);
+  }
+  if (!live.length) return;
+
+  /* SHORTER, AND SOLID (Mind, 2026-10-15: "the fill needs to be darker
+     not lighter"). A translucent crimson pill sat on top of the face and
+     read as a smear; the text has to sit on the BACKGROUND colour, so
+     the label is legible wherever the row happens to cross her. Squat,
+     dark, outlined in crimson. */
+  const pad = Math.max(10, Math.round(scale * 0.018));
+  const h = Math.max(18, Math.round(scale * 0.034));
+  const fs = Math.max(10, Math.round(h * 0.50));
+  ctx.font = `600 ${fs}px 'SF Mono',Menlo,Consolas,monospace`;
+  ctx.textBaseline = "middle";
+
+  const widths = live.map((k) => ctx.measureText(labels[k]).width + pad * 2);
+  const gap = Math.round(pad * 0.8);
+  let x = (W - (widths.reduce((a, b) => a + b, 0) + gap * (live.length - 1))) / 2;
+  /* Just above the chat, measured. Falls back to a bottom margin if the
+     panel is not in the page at all, so a face without the HUD still
+     shows its statuses somewhere sane. */
+  const panel = document.getElementById("transcript-panel");
+  const top = panel ? panel.getBoundingClientRect().top : H - h * 2;
+  const y = Math.round(Math.max(8, top - h - Math.max(10, h * 0.45)));
+
+  live.forEach((k, i) => {
+    const w = widths[i];
+    const f = Math.min(1, chipFade[k]);
+    /* COMPACTING BREATHES, the other two sit still. It is the only one
+       of the three that means "wait", and a still chip reads as a label
+       rather than as something in progress. */
+    const pulse = k === "compacting" ? 0.72 + 0.28 * (0.5 + 0.5 * Math.sin(t * 3.2)) : 1;
+    const alpha = f * pulse;
+
+    ctx.beginPath();
+    const r = h / 2;
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fillStyle = rgba(BACKDROP, 0.88 * alpha);
+    ctx.fill();
+    ctx.strokeStyle = rgba(CRIMSON, 0.55 * alpha);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = rgba(HOT, 0.92 * alpha);
+    ctx.fillText(labels[k], x + pad, y + h / 2 + 0.5);
+    x += w + gap;
+  });
 }
 
 // NO BROWSER MIC. core.js can open the microphone itself (`{mic:true}`),
