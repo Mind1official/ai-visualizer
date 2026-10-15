@@ -1,0 +1,155 @@
+/* THE HUD AROUND A FACE -- shared, so a new face does not start blank.
+ *
+ * The activity strip, the transcript, the context gauge, plan usage and
+ * the health gauge belong to the FACE rather than to core.js, which is
+ * why a freshly written face has none of them. Mind, 2026-10-14: "We
+ * also need all the other elements on the face, the chat, the update
+ * text at the top, all the cards."
+ *
+ * Lifted verbatim from the Radial face so the two cannot drift in
+ * appearance. Radial still carries its own copy on purpose: it is
+ * upstream-forked code that works, and converting it to this would risk
+ * the known-good face to tidy the new one.
+ *
+ * A face using this needs, in its markup:
+ *   <div id="activity-panel" class="hud-panel"></div>
+ *   <div id="transcript-panel" class="hud-panel"></div>
+ *   <div id="context-gauge"></div><div id="usage-gauge"></div>
+ *   <div id="health-gauge"></div>
+ * ...and must define `frame(dt)` before loading hud.js.
+ */
+
+  .hud-panel{position:fixed;left:0;right:0;z-index:5;cursor:auto;
+    font:12px/1.5 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);background:rgba(10,5,7,.74);
+    padding:8px 18px;overflow-y:auto}
+  .hud-panel .line{white-space:pre-wrap;word-break:break-word;opacity:.92}
+  #activity-panel{top:0;padding:6px 18px;font-size:11px;overflow:hidden;
+    border-bottom:1px solid rgba(182,2,50,.5)}
+  #activity-panel .line{color:rgb(255,150,90);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  #activity-panel .t{color:rgb(255,205,150);opacity:.85}
+  #transcript-panel{bottom:0;max-height:24vh;border-top:1px solid rgba(182,2,50,.5);
+    display:flex;flex-direction:column}
+  #transcript-panel .line{max-width:70%}
+  #transcript-panel .you{color:rgb(255,215,222);text-align:left;margin-right:auto}
+  #transcript-panel .janus{color:rgb(255,110,150);text-align:right;margin-left:auto}
+  /* CONTEXT GAUGE -- sits on the right, just above the transcript.
+     Its bottom is set from JS so it rides on top of the transcript
+     panel however tall that grows. */
+  /* MUSIC MODE: chat, context and plan step aside for the visualizer.
+     Faded, not removed, so the layout (and the orb's centre) holds still. */
+  #transcript-panel,#usage-gauge{transition:opacity 1s ease}
+  body.music #transcript-panel,body.music #usage-gauge,
+  body.music #context-gauge{opacity:0!important;pointer-events:none!important;
+    transition:opacity 1s ease!important}
+  #context-gauge{position:fixed;right:18px;z-index:6;cursor:auto;
+    width:196px;padding:10px 12px 11px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #context-gauge.on{opacity:1;transform:translateY(0)}
+  #context-gauge .cg-head{display:flex;justify-content:space-between;
+    align-items:baseline;letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase}
+  #context-gauge .cg-head b{font-weight:400;letter-spacing:.06em;
+    color:rgba(255,120,155,.9)}
+  #context-gauge .cg-arc{display:block;margin:2px auto 0}
+  #context-gauge .cg-pct{font-size:21px;letter-spacing:.02em;
+    fill:rgb(255,225,233)}
+  #context-gauge .cg-pct-u{font-size:9px;fill:rgba(255,150,175,.8)}
+  #context-gauge .cg-nums{display:flex;justify-content:space-between;
+    font-size:10px;color:rgba(255,205,218,.85);margin-top:1px}
+  #context-gauge .cg-nums .sep{color:rgba(182,2,50,.8)}
+  #context-gauge .cg-bar{display:flex;height:4px;margin-top:7px;gap:1px;
+    border-radius:3px;overflow:hidden;background:rgba(255,190,205,.10)}
+  #context-gauge .cg-bar i{display:block;height:100%}
+  #context-gauge .cg-legend{margin-top:6px;display:grid;gap:2px}
+  #context-gauge .cg-legend div{display:flex;align-items:center;
+    gap:5px;font-size:9px;color:rgba(255,200,214,.78)}
+  #context-gauge .cg-legend s{width:6px;height:6px;border-radius:2px;
+    flex:none;text-decoration:none}
+  #context-gauge .cg-legend em{margin-left:auto;font-style:normal;
+    color:rgba(255,225,233,.9)}
+  /* STACK HEALTH (our fork) -- tools/health.py -> .health -> AV state.
+     Bottom-left, riding directly above the MIC IN meter, in the SAME
+     visual language as the context gauge: Mind asked for it to look like
+     the token and context panels rather than like canvas chrome, so it is
+     a DOM panel with the same gradient, border, glow and 9px uppercase
+     head, not hand-painted bars.
+
+     It is absent, never reassuring: the server sends null once the check
+     has missed two runs, and a health panel frozen at OK would be the one
+     object here Mind would trust without checking. */
+  body.music #health-gauge{opacity:0!important;pointer-events:none!important;
+    transition:opacity 1s ease!important}
+  #health-gauge{position:fixed;left:18px;z-index:6;cursor:auto;
+    width:186px;padding:9px 12px 10px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #health-gauge.on{opacity:1;transform:translateY(0)}
+  #health-gauge .hg-head{display:flex;justify-content:space-between;
+    align-items:baseline;letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase}
+  #health-gauge .hg-head b{font-weight:400;letter-spacing:.06em;
+    color:rgba(255,120,155,.9)}
+  /* The sparkline: one cell per run, oldest left. Fixed height so the
+     panel never changes size as history fills -- a box that grows for a
+     day and then stops is a box that looks broken on day one. */
+  #health-gauge .hg-spark{display:flex;align-items:flex-end;gap:1px;
+    height:20px;margin-top:6px}
+  #health-gauge .hg-spark i{display:block;flex:1 1 0;min-width:1px;
+    border-radius:1px;background:rgba(182,2,50,.75)}
+  #health-gauge .hg-spark i.bad{background:rgb(255,90,120)}
+  #health-gauge .hg-spark i.gap{background:rgba(255,190,205,.12)}
+  #health-gauge .hg-word{margin-top:6px;font-size:17px;letter-spacing:.02em;
+    color:rgb(255,225,233);line-height:1.1}
+  #health-gauge .hg-word.bad{color:rgb(255,120,150)}
+  #health-gauge .hg-sub{font-size:9px;color:rgba(255,200,214,.78);
+    margin-top:1px;letter-spacing:.06em;text-transform:uppercase}
+  #health-gauge .hg-down{font-size:10px;color:rgb(255,150,175);
+    margin-top:4px;word-break:break-word}
+  /* PLAN USAGE -- the 5h and 7d windows. Lives directly ABOVE the context
+     gauge in the same right-hand column (it used to be painted on the
+     canvas bottom-left), so the three numbers that answer "how much room
+     is left" read as one stack. Bottom is set from JS, same as the gauge. */
+  #usage-gauge{position:fixed;right:18px;z-index:6;cursor:auto;
+    width:196px;padding:8px 12px 9px;border-radius:10px;
+    font:11px/1.45 'SF Mono',Menlo,Consolas,monospace;
+    color:rgb(255,190,205);
+    background:linear-gradient(160deg,rgba(26,4,11,.96),rgba(9,4,6,.94));
+    border:1px solid rgba(182,2,50,.55);
+    box-shadow:0 0 22px rgba(182,2,50,.22),inset 0 0 18px rgba(182,2,50,.10);
+    backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(6px);
+    transition:opacity .5s ease,transform .5s ease}
+  #usage-gauge.on{opacity:1;transform:translateY(0)}
+  #usage-gauge .ug-head{letter-spacing:.14em;font-size:9px;
+    color:rgba(255,150,175,.75);text-transform:uppercase;margin-bottom:4px}
+  #usage-gauge .ug-row{display:flex;align-items:center;gap:7px;
+    font-size:10px;margin-top:3px}
+  #usage-gauge .ug-row b{font-weight:400;color:rgba(255,150,175,.8);
+    letter-spacing:.06em;width:18px;flex:none}
+  #usage-gauge .ug-row .ug-track{flex:1;height:4px;border-radius:3px;
+    background:rgba(255,190,205,.10);overflow:hidden}
+  #usage-gauge .ug-row .ug-track i{display:block;height:100%;
+    background:linear-gradient(90deg,#FF8AA6,#B60232)}
+  #usage-gauge .ug-row.hot .ug-track i{background:rgb(255,110,90)}
+  #usage-gauge .ug-row em{font-style:normal;color:rgba(255,225,233,.92);
+    width:30px;text-align:right;flex:none}
+  #usage-gauge .ug-row.hot em{color:rgb(255,130,110)}
+  #usage-gauge .ug-reset{font-size:9px;color:rgba(255,200,214,.62);
+    margin-left:25px}
+  .hud-panel::-webkit-scrollbar{width:8px}
+  .hud-panel::-webkit-scrollbar-thumb{background:rgba(182,2,50,.55);border-radius:4px}
