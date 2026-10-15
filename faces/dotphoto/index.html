@@ -879,7 +879,15 @@ function frame(now) {
   /* The compaction band, bottom to top, a little over a second a pass.
      Same normalised space as the breath wave, so it reads at any size. */
   const compactY = compactT > 0.01 ? 0.9 - ((t * 0.8) % 1) * 1.9 : -99;
-  const push = scale * (0.012 + 0.014 * present + 0.030 * env);
+  /* NO SWELL ON THE VOICE (Mind, 2026-10-15: "remove the swell when you
+     talk, the mouth move and brightness change alone would look
+     better"). The speech envelope used to throw every dot outward, so
+     the whole head pulsed on each syllable and the mouth -- the part
+     that is actually saying something -- was lost inside a face that
+     was breathing at the camera. Depth still follows PRESENCE, which
+     moves slowly; the voice is carried by the jaw and by brightness,
+     both of which are already keyed to it. */
+  const push = scale * (0.012 + 0.014 * present);
   // TAILS, SHORTER WHEN SPEAKING. The voice term used to be the biggest
   // of the three, so every syllable threw hair off the whole head and the
   // features vanished underneath it. The spikes now describe the face
