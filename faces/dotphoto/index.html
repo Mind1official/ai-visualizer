@@ -998,7 +998,16 @@ function frame(now) {
     // Brighter as well as longer: the socket has to come UP to the skin
     // around it, and at 0.42 it only came half way, so the eye dimmed
     // rather than closed.
-    if (blink > 0.01) h += d.eye * blink * 0.66;
+    // IT FLASHES, IT DOES NOT ZOOM (Mind, 2026-10-15). Raising h brightens
+    // a dot AND moves it: h feeds the depth push and the dot radius as
+    // well as the colour, so the socket was swelling toward the camera as
+    // it lit up and the blink read as the eye bulging. So the lid's lift
+    // is kept OUT of the geometry below -- `hG` is the height the
+    // positions and sizes are built from, and only the brightness sees
+    // the blink.
+    const bl = blink > 0.01 ? d.eye * blink * 1.05 : 0;
+    h += bl;
+    const hG = h - bl;
     // The gaze slides the iris's dots sideways within the socket. Only a
     // few pixels -- it is a long way under the dot spacing, so the
     // lattice holds and the likeness with it, and the dark core moving
@@ -1012,7 +1021,7 @@ function frame(now) {
     // The wave adds a little depth as it passes, so a band of the face
     // lifts and settles like something breathing under a sheet.
     const wv = Math.exp(-Math.pow((d.py / scale) - waveY, 2) / 0.10);
-    const lift = Math.max(0, h) * present * (0.84 + 0.16 * breath) * (1 + 0.14 * wv);
+    const lift = Math.max(0, hG) * present * (0.84 + 0.16 * breath) * (1 + 0.14 * wv);
     // ALMOST NO PERSPECTIVE PUSH. The hand-built Mask threw its dots
     // outward by height to fake depth, which is free when the "image" is
     // a smooth dome. Doing it to a PHOTOGRAPH smears the photograph:
@@ -1066,7 +1075,11 @@ function frame(now) {
     Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick)));
     // The rim's dots shrink as well as dim. Fading alone leaves a ring
     // of full-sized ghosts and still reads as a cut line.
-    const r = (0.35 + 3.1 * near) * (0.45 + 0.55 * d.edge);
+    // The radius comes off the GEOMETRIC height, so a closing lid does
+    // not inflate the dots it brightens.
+    const nearG = Math.max(0, Math.min(1, hG * 1.05))
+                  * (0.35 + 0.65 * present) * (1 + idleBreath * 0.045) * (1 + mF * 0.55);
+    const r = (0.35 + 3.1 * nearG) * (0.45 + 0.55 * d.edge);
 
     // The spikes: thrown off the steep parts, pointing the way the
     // surface falls away. This is the whole character of the reference
