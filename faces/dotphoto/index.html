@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<!--
+ai-visualizer: give your AI agent a face.
+Copyright (C) 2026 Jared Rhodenizer
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The Portrait</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;background:#070405;overflow:hidden}
+  canvas#stage{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+  body{font:12px/1.5 'SF Mono',Menlo,Consolas,monospace;color:rgb(255,190,205)}
+</style>
+<!-- The panels around the face -- activity strip, transcript, gauges --
+     are the FACE's job, not core.js's, so a new face starts blank. These
+     are shared with any future face rather than copied into each one. -->
+<link rel="stylesheet" href="../_shared/hud.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="activity-panel" class="hud-panel"></div>
+<div id="transcript-panel" class="hud-panel"></div>
+<div id="context-gauge"></div>
+<div id="usage-gauge"></div>
+<div id="health-gauge"></div>
+<script src="../../core.js"></script>
+<script>
+/* THE MASK — a face made of a point grid.
+ *
+ * Mind handed over a screenshot of a blue dot-matrix face and asked:
+ * "Is that something you can create for your own face?" Then: "Let's go
+ * second mode for now. I want to see what it looks like."
+ *
+ * HOW IT WORKS, because the trick is smaller than it looks. There is no
+ * 3D model and no mesh. There is a flat grid of dots and a HEIGHT FIELD
+ * -- a function h(x, y) that says how far forward the face sticks out at
+ * that point. Every dot then does four things with its height:
+ *
+ *   * moves outward from centre, which is what fakes the perspective;
+ *   * grows, because near things are bigger;
+ *   * brightens, because near things catch the light;
+ *   * throws a SPIKE where the surface is steep, which is what gives the
+ *     reference image its bristled silhouette. Steepness is just the
+ *     gradient of h, and the spike points along it.
+ *
+ * THE HEIGHT FIELD IS WRITTEN BY HAND, not sampled from a photo or a
+ * model file. A dome for the skull, gaussians subtracted for the eye
+ * sockets, a ridge for the nose, a lens for the mouth. That is a real
+ * trade: a scanned head would be anatomically right, but it would be an
+ * asset to ship, to license and to load, and this file would then be a
+ * renderer for a thing it does not contain. Hand-built, the face is
+ * fifty lines of arithmetic that can be tuned in place -- and when it
+ * looks wrong, the wrongness is in a number somebody can read.
+ *
+ * IT IS DELIBERATELY NOT A PORTRAIT. Dots, gaps, no skin. A face that
+ * nearly resolves into a person lands in the uncanny valley; one that is
+ * visibly made of data does not, and that is the honest thing to be.
+ *
+ * WHAT IT DOES WITH THE VOICE (core.js supplies all of it):
+ *   idle       slow breath, dots drifting on their own
+ *   listening  a ripple runs outward from the grid, mic-driven
+ *   thinking   the grid scatters and reknits, face held back
+ *   speaking   the face surges forward, spikes extend on every syllable
+ */
+
+// AV is core.js's own global -- redeclaring it here is a syntax error
+// that blanks the face.
+const cvs = document.getElementById("stage");
+const ctx = cvs.getContext("2d", { alpha: false });
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  cvs.width = W * DPR; cvs.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  build();
+}
+addEventListener("resize", resize);
+
+/* ---------------------------- the height field --------------------------- */
+/* Coordinates are face-local: x in [-1, 1] across, y in [-1, 1] down, with
+ * (0, 0) between the eyes. h returns roughly 0..1, where 1 is the tip of
+ * the nose. Everything below is tuned by eye; the comments say what each
+ * term is FOR so the next person can tune it too. */
+
+const gauss = (d2, s) => Math.exp(-d2 / (2 * s * s));
+
+/* ------------------------- the face, from a photo -------------------------
+ * THE SOURCE IS A PICTURE, NOT ARITHMETIC. The first Mask hand-built a
+ * skull out of gaussians -- a dome, subtracted eye sockets, a nose ridge.
+ * It worked, and it never stopped reading as an egg with dimples, because
+ * every feature that makes a face legible (the shadow under a brow, the
+ * turn of a cheekbone, the edge of a lip) is a LIGHTING fact, and a
+ * height field only knows distance. Fighting that with a lambert light
+ * failed three ways on 2026-10-14 before Mind handed over the reference
+ * he actually wanted: a dotted portrait. That image is a photograph
+ * sampled by dots. A painter did the shading; the dots only carry it.
+ *
+ * So: sample a portrait's luminance per dot and use it exactly where the
+ * old field used height -- displacement, size, brightness, spikes. The
+ * rig above it (the mouth, the jaw, the states) is unchanged.
+ *
+ * Swap `source.jpg` for any portrait. It wants: head filling the frame,
+ * strong side light, dark background. */
+
+const SRC = "source.jpg";
+// How much of the image the face coordinates cover. x spans -0.75..0.75,
+// y spans -1..1, so these are the numbers that frame the head.
+// HOW BIG THE HEAD SITS ON SCREEN. Only the width is a choice -- the
+// height follows the picture's own aspect once it has loaded, because
+// picking both by hand stretches whatever portrait gets dropped in next.
+const FACE_W = 1.45;
+let FACE_H = 1.44;
+// Where the mouth lands as a fraction down the image, converted into the
+// same face coordinates the rig uses. MEASURE THIS when swapping the
+// picture -- the jaw hinges on it.
+const MOUTH_FRAC = 0.860;
+let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+
+let IMG = null, IW = 0, IH = 0, LUM = null;
+
+function loadSource(then) {
+  const im = new Image();
+  im.onload = () => {
+    IW = im.naturalWidth; IH = im.naturalHeight;
+    FACE_H = FACE_W * (IH / IW);
+    MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+    const off = document.createElement("canvas");
+    off.width = IW; off.height = IH;
+    const octx = off.getContext("2d", { willReadFrequently: true });
+    octx.drawImage(im, 0, 0);
+    const px = octx.getImageData(0, 0, IW, IH).data;
+    // One float per pixel: the renderer asks for this thousands of times
+    // a build and does not want four bytes and a multiply each time.
+    LUM = new Float32Array(IW * IH);
+    for (let i = 0, p = 0; i < LUM.length; i++, p += 4) {
+      LUM[i] = (0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2]) / 255;
+    }
+    // SMOOTH IT FIRST. A photograph is noisy at the pixel level and the
+    // renderer differentiates it: raw, every dot came out "steep", the
+    // spike test fired everywhere and the face rendered as four hairy
+    // clumps. A couple of box passes cost milliseconds once and turn the
+    // gradient back into something that describes a cheekbone.
+    for (let pass = 0; pass < 2; pass++) {
+      const out = new Float32Array(LUM.length);
+      for (let yy = 0; yy < IH; yy++) {
+        for (let xx = 0; xx < IW; xx++) {
+          let sum = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = yy + dy; if (ny < 0 || ny >= IH) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = xx + dx; if (nx < 0 || nx >= IW) continue;
+              sum += LUM[ny * IW + nx]; n++;
+            }
+          }
+          out[yy * IW + xx] = sum / n;
+        }
+      }
+      LUM = out;
+    }
+    // AUTO-LEVELS, so the face does not depend on how the photo was
+    // exposed. The first two sources proved the point from both ends: a
+    // backlit portrait put its brightest pixels in the BACKGROUND, and a
+    // moody black-and-white one sat so low that nearly every dot fell
+    // under the floor and the head vanished. Stretching the picture's own
+    // 2nd-to-98th percentile into 0..1 makes any reasonable portrait land
+    // in the range the renderer was tuned for.
+    {
+      const hist = new Int32Array(256);
+      for (let i = 0; i < LUM.length; i++) hist[(LUM[i] * 255) | 0]++;
+      const lo_n = LUM.length * 0.02, hi_n = LUM.length * 0.98;
+      let acc = 0, lo = 0, hi = 255;
+      for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= lo_n) { lo = i; break; } }
+      acc = 0;
+      for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= hi_n) { hi = i; break; } }
+      const a0 = lo / 255, span = Math.max(0.05, (hi - lo) / 255);
+      for (let i = 0; i < LUM.length; i++) {
+        LUM[i] = Math.max(0, Math.min(1, (LUM[i] - a0) / span));
+      }
+    }
+    // LOCAL CONTRAST, which is what finally made eyes and lips read.
+    // Global levels only move the whole picture at once: a face lit from
+    // one side still renders as a bright patch and a dark one, and the
+    // features inside each patch stay flat. Subtracting a wide blur and
+    // re-amplifying what is left is the same trick a darkroom print uses
+    // -- every region gets its own exposure, so the eye sockets go dark
+    // against their own cheeks instead of against the forehead.
+    {
+      const R = Math.max(4, Math.round(Math.min(IW, IH) * 0.08));
+      const mean = new Float32Array(LUM.length);
+      const tmp = new Float32Array(LUM.length);
+      // Separable box blur: two passes of a running sum, because an
+      // R-by-R kernel at this radius is tens of millions of adds.
+      for (let y = 0; y < IH; y++) {
+        let acc = 0;
+        for (let x = -R; x <= R; x++) acc += LUM[y * IW + Math.min(IW - 1, Math.max(0, x))];
+        for (let x = 0; x < IW; x++) {
+          tmp[y * IW + x] = acc / (2 * R + 1);
+          acc -= LUM[y * IW + Math.min(IW - 1, Math.max(0, x - R))];
+          acc += LUM[y * IW + Math.min(IW - 1, Math.max(0, x + R + 1))];
+        }
+      }
+      for (let x = 0; x < IW; x++) {
+        let acc = 0;
+        for (let y = -R; y <= R; y++) acc += tmp[Math.min(IH - 1, Math.max(0, y)) * IW + x];
+        for (let y = 0; y < IH; y++) {
+          mean[y * IW + x] = acc / (2 * R + 1);
+          acc -= tmp[Math.min(IH - 1, Math.max(0, y - R)) * IW + x];
+          acc += tmp[Math.min(IH - 1, Math.max(0, y + R + 1)) * IW + x];
+        }
+      }
+      for (let i = 0; i < LUM.length; i++) {
+        const detail = LUM[i] - mean[i];
+        // Keep a little of the overall shape (the 0.45) so the face still
+        // has a lit side; the rest is local.
+        LUM[i] = Math.max(0, Math.min(1, 0.46 + detail * 2.6 + (mean[i] - 0.5) * 0.45));
+      }
+    }
+    IMG = im;
+    then();
+  };
+  // A missing picture must not leave a blank window with no explanation.
+  im.onerror = () => { console.error("dotphoto: could not load " + SRC); };
+  im.src = SRC;
+}
+
+function lumAt(x, y) {
+  if (!LUM) return 0;
+  const u = (x / FACE_W + 0.5) * IW;
+  const v = (y / FACE_H + 0.5) * IH;
+  if (u < 0 || v < 0 || u >= IW - 1 || v >= IH - 1) return 0;
+  // Bilinear: the grid steps about a pixel and a half at a time, and
+  // nearest-neighbour there turns a cheekbone into a staircase.
+  const x0 = u | 0, y0 = v | 0, fx = u - x0, fy = v - y0;
+  const i = y0 * IW + x0;
+  return (LUM[i] * (1 - fx) + LUM[i + 1] * fx) * (1 - fy)
+       + (LUM[i + IW] * (1 - fx) + LUM[i + IW + 1] * fx) * fy;
+}
+
+// BLACK IS NOT THE FACE. A photo's background, hair and shadow side all
+// sit near zero, and dots there would draw a rectangle of noise instead
+// of a head. Everything below the floor is treated as the flat field the
+// face emerges from, and an oval vignette fades the frame's corners.
+const FLOOR = 0.05;
+
+function heightAt(x, y) {
+  const l = lumAt(x, y);
+  // The vignette follows the PICTURE's rectangle, not a fixed oval:
+  // a portrait-shaped source under an oval tuned for a square one had
+  // its cheeks shaved off and read as a vertical smear.
+  const vx = x / (FACE_W * 0.52), vy = y / (FACE_H * 0.52);
+  const vig = 1 - Math.min(1, Math.pow(vx * vx + vy * vy, 1.4) * 0.55);
+  // Lifted and stretched into the band the renderer actually uses for
+  // brightness (roughly 0.22 upward), so midtones -- which is most of a
+  // face -- are not all rounded down into the flat field.
+  // A LOW CUTOFF ON PURPOSE. Keeping only the bright dots left a
+  // constellation of highlights with no face between them -- the
+  // midtones ARE the face, and they are what the shading then sorts into
+  // cheek, jaw and shadow.
+  const n = Math.max(0, (l - FLOOR) / (1 - FLOOR));
+  // Gamma below 1 opens the midtones: skin is mostly midtone, and left
+  // linear it renders as a thin scatter of highlights.
+  const h = (0.12 + 0.88 * Math.pow(n, 0.58)) * Math.max(0, vig);
+  return h > 0.07 ? h : -1;
+}
+
+/* ------------------------------- the grid -------------------------------- */
+/* Built once per resize: the height field never changes, only what the
+ * renderer does with it, so sampling it every frame would be 8000 calls a
+ * frame for an answer that is already known. */
+
+let dots = [], scale = 1, cx = 0, cy = 0;
+const STEP = 5;              // pixels between dots at 1x. Finer than the
+                             // hand-built Mask: a photograph carries detail
+                             // worth resolving, where a gaussian dome did not.
+
+function build() {
+  dots = [];
+  if (!LUM) return;            // the first call lands before the photo does
+  scale = Math.min(W, H) * 0.42;
+  cx = W / 2; cy = H / 2;
+  const step = Math.max(9, STEP * (Math.min(W, H) / 900));
+  // A WIDER STENCIL than the hand-built field wanted. The photo carries
+  // detail far below the dot spacing, and sampling it tightly measures
+  // skin texture rather than the shape of the face.
+  const e = 0.035;
+  const GSCALE = 0.16;       // the photo's gradients run an order of
+                             // magnitude hotter than the gaussian field's;
+                             // this puts them back in the range the spike
+                             // test and the shading were tuned for.
+
+  for (let py = -H * 0.62; py <= H * 0.62; py += step) {
+    for (let px = -W * 0.55; px <= W * 0.55; px += step) {
+      const x = px / scale, y = py / scale;
+      const h = heightAt(x, y);
+      const on = h > 0;
+      // The gradient: how steep the surface is here, and which way it
+      // faces. The spikes ride on this.
+      let gx = 0, gy = 0;
+      if (on) {
+        gx = GSCALE * (Math.max(0, heightAt(x + e, y)) - Math.max(0, heightAt(x - e, y))) / (2 * e);
+        gy = GSCALE * (Math.max(0, heightAt(x, y + e)) - Math.max(0, heightAt(x, y - e))) / (2 * e);
+      }
+      // WHICH DOTS ARE THE MOUTH, worked out once. The height field is
+      // static and the mouth is not, so baking an open mouth into h would
+      // mean rebuilding eight thousand dots every frame. Instead each dot
+      // carries how much it BELONGS to the mouth, and the renderer moves
+      // it by that weight times the voice envelope.
+      const my = y - MOUTH_Y;
+      const across = gauss(x * x, 0.34);              // nothing at the cheeks
+      const lipU = on ? across * gauss(Math.pow(my + 0.06, 2), 0.075) : 0;
+      const lipL = on ? across * gauss(Math.pow(my - 0.07, 2), 0.085) : 0;
+      const hole = on ? across * gauss(my * my, 0.055) : 0;
+      // The jaw: everything below the mouth swings, most of it at the chin.
+      const jaw = on ? Math.max(0, Math.min(1, (y - MOUTH_Y + 0.02) / 0.5)) : 0;
+
+      dots.push({
+        px, py, h: on ? h : 0, on,
+        lipU, lipL, hole, jaw,
+        gx, gy, g: Math.min(2.2, Math.hypot(gx, gy)),
+        // A per-dot phase so the idle drift and the scatter never move
+        // as one slab.
+        ph: Math.random() * Math.PI * 2,
+        jx: (Math.random() - 0.5), jy: (Math.random() - 0.5),
+      });
+    }
+  }
+}
+
+/* ------------------------------ the render ------------------------------- */
+
+const CRIMSON = [182, 2, 50];
+const HOT = [255, 140, 170];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+                          a[2] + (b[2] - a[2]) * t];
+
+let last = performance.now(), t = 0;
+let present = 0;        // 0 = grid only, 1 = face fully forward
+let scatter = 0;        // thinking: the grid comes apart
+let ripple = -1;        // listening: a ring travelling outward
+let open = 0;           // speaking: how far the mouth is open, 0..1
+
+// THE FACE SITS BETWEEN THE PANELS, not in the middle of the window.
+// The transcript owns the bottom quarter of the screen and the activity
+// strip owns the top edge -- centring on the window put the mouth and
+// chin behind the transcript, which is a poor look for the one feature
+// Mind asked for. The insets come from the shared HUD and change as the
+// transcript grows, so this is read every frame rather than at build.
+function fitBetweenPanels() {
+  const top = (typeof topInset === "function") ? topInset() : 0;
+  const bot = (typeof chromeInset === "function") ? chromeInset() : 0;
+  const usable = Math.max(120, H - top - bot);
+  cy = top + usable / 2;
+  scale = Math.min(W * 0.36, usable * 0.40);
+}
+
+function frame(now) {
+  const dt = Math.min(64, now - last); last = now; t += dt / 1000;
+  // THE CONTRACT. core.js polls the bus, but a face has to ASK it to
+  // publish -- AV.state, AV.env and AV.micLevel only move when tick is
+  // called. Leave this out and the face reads its startup values for
+  // ever: it animates, it never errors, and it simply never hears the
+  // voice line. That is exactly what happened on the night this face was
+  // built -- "even when you're talking, it doesn't move" -- and it cost
+  // an hour of looking at a bus that was working perfectly the whole
+  // time. The face was the broken end.
+  AV.tick(dt);
+  fitBetweenPanels();
+  const state = AV.state || "idle";
+  const env = AV.env || 0;            // speech envelope, 0..1
+  const mic = AV.micLevel || 0;
+
+  // The face comes forward to speak and retreats the rest of the time --
+  // the same idea as the Radial's orb, and the reason this does not just
+  // sit there staring all day.
+  const want = state === "speaking" ? 1 : state === "listening" ? 0.62
+             : state === "thinking" ? 0.34 : 0.54;
+  present += (want - present) * Math.min(1, dt / (want > present ? 180 : 420));
+  scatter += ((state === "thinking" ? 1 : 0) - scatter) * Math.min(1, dt / 500);
+
+  if (state === "listening") {
+    if (ripple < 0 && mic > 0.35) ripple = 0;
+    if (ripple >= 0) { ripple += dt / 900; if (ripple > 1.6) ripple = -1; }
+  } else ripple = -1;
+
+  // Backdrop: a slow crimson bloom behind the face, so the dark side of
+  // the grid is not pure black.
+  ctx.fillStyle = "#070405";
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.55);
+  // Dimmer than the Mask's: a photograph's shadows ARE the drawing, and
+  // a bloom behind them fills the very gaps that make the face read.
+  glow.addColorStop(0, rgba(CRIMSON, 0.07 + 0.07 * present + 0.08 * env));
+  glow.addColorStop(1, "rgba(7,4,5,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  // HOW FAR THE MOUTH IS OPEN. The envelope alone is too twitchy to read
+  // as a jaw -- a jaw has mass -- so it chases the envelope, opening fast
+  // and closing slower, which is also how a real one moves.
+  const wantOpen = state === "speaking" ? Math.min(1, env * 1.4) : 0;
+  open += (wantOpen - open) * Math.min(1, dt / (wantOpen > open ? 55 : 160));
+
+  const breath = 0.5 + 0.5 * Math.sin(t * 0.9);
+  // A SLOW WAVE down the face, always running. Idle used to be a breath
+  // so gentle the whole thing read as a still image -- "it's not moving
+  // right now, do I need to restart something?" -- which is the worst
+  // thing a live face can look like. This is what says it is running.
+  const waveY = (t * 0.22) % 2 - 0.5;
+  const push = scale * (0.012 + 0.014 * present + 0.030 * env);
+  const spikeLen = scale * (0.020 + 0.030 * present + 0.075 * env);
+
+  for (const d of dots) {
+    let px = d.px, py = d.py;
+
+    // Thinking: every dot wanders off its lattice point and comes back.
+    if (scatter > 0.01) {
+      const s = scatter * scale * 0.05 * (1 + Math.sin(t * 1.7 + d.ph));
+      px += d.jx * s; py += d.jy * s;
+    }
+
+    if (!d.on) {
+      // The flat field the face sits in. It is what makes the face read
+      // as EMERGING from a grid rather than floating on black.
+      let a = 0.17 + 0.07 * Math.sin(t * 0.7 + d.ph)
+            + 0.10 * Math.exp(-Math.pow((py / scale) - waveY, 2) / 0.08);
+      if (ripple >= 0) {
+        const rr = Math.hypot(px, py) / (scale * 1.6);
+        a += 0.45 * Math.max(0, 1 - Math.abs(rr - ripple) * 9) * mic;
+      }
+      ctx.fillStyle = rgba(CRIMSON, Math.max(0, a));
+      ctx.fillRect(cx + px - 1, cy + py - 1, 2, 2);
+      continue;
+    }
+
+    // THE MOUTH MOVES. The lips part, the jaw swings down beneath them,
+    // and the aperture between recedes -- a hole reads as a hole because
+    // it is darker than its edges, not because anything draws one.
+    let h = d.h;
+    if (open > 0.01) {
+      const gap = open * scale * 0.060;
+      py += (d.lipL * 0.55 + d.jaw * d.jaw * 0.90) * gap;    // lower lip, jaw
+      py -= d.lipU * 0.32 * gap;                              // upper lip
+      h -= d.hole * open * 0.36;                              // the gap darkens
+      h += (d.lipU + d.lipL) * open * 0.08;                   // lips catch light
+    }
+
+    // Depth does the work: out from centre, bigger, brighter.
+    // The wave adds a little depth as it passes, so a band of the face
+    // lifts and settles like something breathing under a sheet.
+    const wv = Math.exp(-Math.pow((d.py / scale) - waveY, 2) / 0.10);
+    const lift = Math.max(0, h) * present * (0.84 + 0.16 * breath) * (1 + 0.14 * wv);
+    // ALMOST NO PERSPECTIVE PUSH. The hand-built Mask threw its dots
+    // outward by height to fake depth, which is free when the "image" is
+    // a smooth dome. Doing it to a PHOTOGRAPH smears the photograph:
+    // every dot leaves the pixel it was sampling, and the likeness --
+    // the only thing this face has -- goes with it. Here the dots hold
+    // their lattice like a halftone and let brightness and size carry
+    // the picture, with just enough drift to read as three-dimensional.
+    const k = 1 + lift * 0.05;
+    const x = cx + px * k + (px / scale) * push * lift;
+    const y = cy + py * k + (py / scale) * push * lift;
+
+    // Brightness across the face's OWN depth range, not an absolute
+    // scale. The first version saturated: every dot above a low height
+    // came out equally bright, so the sockets, the nose and the mouth all
+    // washed out into one dotted egg. Lighting a face is contrast, and
+    // contrast needs the range it actually occupies.
+    // h IS ALREADY THE PICTURE. The hand-built field needed remapping
+    // because its heights bunched between 0.22 and 0.84; a levelled
+    // photograph already spans the range, and re-squeezing it threw away
+    // most of the face's midtones.
+    const depth = Math.max(0, Math.min(1, h * 1.05));
+    const near = depth * (0.35 + 0.65 * present);
+    // A WIDE SWING between shadow and highlight is the whole trick: in
+    // the reference, dark areas carry almost no dots and lit ones carry
+    // big bright ones. A uniform dot over the whole face reads as a
+    // blob however well it is sampled.
+    const a = (0.11 + 1.45 * near) * (1 + 0.22 * wv);
+    const col = mix(CRIMSON, HOT, Math.min(1, near * (0.70 + 0.70 * env)));
+    const r = 0.35 + 3.1 * near;
+
+    // The spikes: thrown off the steep parts, pointing the way the
+    // surface falls away. This is the whole character of the reference
+    // image, and it is just the gradient drawn as a line.
+    // ONLY THE STEEP PARTS. The first version spiked everywhere and the
+    // face came out as a hairy egg: the rim, the sockets and the nose
+    // wall are where the surface actually falls away.
+    if (d.g > 1.15 && present > 0.15) {
+      const L = spikeLen * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
+      const n = Math.hypot(d.gx, d.gy) || 1;
+      ctx.strokeStyle = rgba(col, 0.12 + 0.34 * present);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - (d.gx / n) * L, y - (d.gy / n) * L);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = rgba(col, a);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // An alert turns the whole field cold-hot: the one thing that must not
+  // be subtle.
+  if (AV.alert) {
+    ctx.strokeStyle = rgba(HOT, 0.35 + 0.25 * Math.sin(t * 7));
+    ctx.lineWidth = 3;
+    ctx.strokeRect(6, 6, W - 12, H - 12);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+resize();
+// The photo arrives late, so the grid is built twice: once empty, once for
+// real. The frame loop starts either way -- a face that waits on a network
+// read to draw ANYTHING is a face that looks broken on a slow disk.
+loadSource(() => { build(); });
+requestAnimationFrame(frame);
+</script>
+<!-- After the face, because the HUD measures the chrome the face draws. -->
+<script src="../_shared/hud.js"></script>
+</body>
+</html>
