@@ -118,21 +118,32 @@ const gauss = (d2, s) => Math.exp(-d2 / (2 * s * s));
  * Swap `source.jpg` for any portrait. It wants: head filling the frame,
  * strong side light, dark background. */
 
-const SRC = "source.jpg";
+const SRC = "source.png";
 // How much of the image the face coordinates cover. x spans -0.75..0.75,
 // y spans -1..1, so these are the numbers that frame the head.
 // HOW BIG THE HEAD SITS ON SCREEN. Only the width is a choice -- the
 // height follows the picture's own aspect once it has loaded, because
 // picking both by hand stretches whatever portrait gets dropped in next.
-const FACE_W = 1.45;
+const FACE_W = 3.00;
 let FACE_H = 1.44;
 // Where the mouth lands as a fraction down the image, converted into the
 // same face coordinates the rig uses. MEASURE THIS when swapping the
 // picture -- the jaw hinges on it.
-const MOUTH_FRAC = 0.860;
+const MOUTH_FRAC = 0.743;
 let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+// WHERE THE EYES ARE. MEASURE THESE AGAIN when the picture changes --
+// the blink hinges on them the way the jaw hinges on MOUTH_Y.
+//
+// And measure them the SLOW way: find the pupils by eye on the picture
+// and check the numbers by drawing circles back onto it. The quick
+// version -- "take the darkest band across the upper half" -- put them
+// on the eyelids, because lashes and a strong brow are darker than an
+// iris. Mind caught it on the live face in one glance ("off a touch").
+const EYE_FRAC = 0.481, EYE_CFRAC = 0.491, EYE_SEP = 0.126;
+let EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
+const EYE_CX = (EYE_CFRAC - 0.5) * FACE_W, EYE_DX = EYE_SEP * FACE_W;
 
-let IMG = null, IW = 0, IH = 0, LUM = null;
+let IMG = null, IW = 0, IH = 0, LUM = null, ALPHA = null;
 
 function loadSource(then) {
   const im = new Image();
@@ -140,10 +151,61 @@ function loadSource(then) {
     IW = im.naturalWidth; IH = im.naturalHeight;
     FACE_H = FACE_W * (IH / IW);
     MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
+    EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
     const off = document.createElement("canvas");
     off.width = IW; off.height = IH;
     const octx = off.getContext("2d", { willReadFrequently: true });
     octx.drawImage(im, 0, 0);
+    // THE CUTOUT'S ALPHA IS THE STENCIL. A portrait exported with a
+    // transparent background already says exactly where the head is --
+    // far better than any luminance threshold, which cannot tell a dark
+    // background from a shadowed jaw. Grab it BEFORE anything is
+    // composited behind the picture, because that is the only moment it
+    // still exists. A picture with no alpha comes back solid, so a flat
+    // JPEG still behaves exactly as it always did.
+    ALPHA = new Float32Array(IW * IH);
+    {
+      const a = octx.getImageData(0, 0, IW, IH).data;
+      for (let i = 0, p = 3; i < ALPHA.length; i++, p += 4) ALPHA[i] = a[p] / 255;
+    }
+    // FEATHER THE STENCIL. A cutout's alpha is a cliff -- one pixel of
+    // antialiasing and then nothing -- so the silhouette came out as a
+    // scissor cut, which is the one edge in nature that does not exist.
+    // Blurring the MASK rather than the picture turns that cliff into a
+    // ramp a few dots wide, and the dots along it can then fade out
+    // instead of stopping. The picture itself is untouched: blur that and
+    // the likeness goes soft with it.
+    {
+      const R = Math.max(2, Math.round(Math.min(IW, IH) * 0.013));
+      const tmp = new Float32Array(ALPHA.length);
+      for (let y = 0; y < IH; y++) {
+        let acc = 0;
+        for (let x = -R; x <= R; x++) acc += ALPHA[y * IW + Math.min(IW - 1, Math.max(0, x))];
+        for (let x = 0; x < IW; x++) {
+          tmp[y * IW + x] = acc / (2 * R + 1);
+          acc -= ALPHA[y * IW + Math.min(IW - 1, Math.max(0, x - R))];
+          acc += ALPHA[y * IW + Math.min(IW - 1, Math.max(0, x + R + 1))];
+        }
+      }
+      for (let x = 0; x < IW; x++) {
+        let acc = 0;
+        for (let y = -R; y <= R; y++) acc += tmp[Math.min(IH - 1, Math.max(0, y)) * IW + x];
+        for (let y = 0; y < IH; y++) {
+          ALPHA[y * IW + x] = acc / (2 * R + 1);
+          acc -= tmp[Math.min(IH - 1, Math.max(0, y - R)) * IW + x];
+          acc += tmp[Math.min(IH - 1, Math.max(0, y + R + 1)) * IW + x];
+        }
+      }
+    }
+    // BLACK BEHIND, NOT OVER. What sits under a cutout's alpha is
+    // whatever the exporter left there -- often white. Read luminance off
+    // that and the auto-levels normalise against a blazing surround, so
+    // the head renders as a dim smudge. destination-over slides black
+    // underneath without touching a pixel of the picture.
+    octx.globalCompositeOperation = "destination-over";
+    octx.fillStyle = "#000";
+    octx.fillRect(0, 0, IW, IH);
+    octx.globalCompositeOperation = "source-over";
     const px = octx.getImageData(0, 0, IW, IH).data;
     // One float per pixel: the renderer asks for this thousands of times
     // a build and does not want four bytes and a multiply each time.
@@ -252,6 +314,22 @@ function lumAt(x, y) {
        + (LUM[i + IW] * (1 - fx) + LUM[i + IW + 1] * fx) * fy;
 }
 
+// IS THIS POINT PART OF THE HEAD AT ALL? Nearest-neighbour is right
+// here: the answer is a yes or a no, and interpolating it only produces
+// half-dots along the silhouette.
+function alphaAt(x, y) {
+  if (!ALPHA) return 1;
+  const u = (x / FACE_W + 0.5) * IW;
+  const v = (y / FACE_H + 0.5) * IH;
+  if (u < 0 || v < 0 || u >= IW - 1 || v >= IH - 1) return 0;
+  // Bilinear, now that the mask is a ramp rather than a yes or a no: the
+  // whole point of the feather is the values BETWEEN the pixels.
+  const x0 = u | 0, y0 = v | 0, fx = u - x0, fy = v - y0;
+  const i = y0 * IW + x0;
+  return (ALPHA[i] * (1 - fx) + ALPHA[i + 1] * fx) * (1 - fy)
+       + (ALPHA[i + IW] * (1 - fx) + ALPHA[i + IW + 1] * fx) * fy;
+}
+
 // BLACK IS NOT THE FACE. A photo's background, hair and shadow side all
 // sit near zero, and dots there would draw a rectangle of noise instead
 // of a head. Everything below the floor is treated as the flat field the
@@ -260,11 +338,25 @@ const FLOOR = 0.05;
 
 function heightAt(x, y) {
   const l = lumAt(x, y);
-  // The vignette follows the PICTURE's rectangle, not a fixed oval:
-  // a portrait-shaped source under an oval tuned for a square one had
-  // its cheeks shaved off and read as a vertical smear.
-  const vx = x / (FACE_W * 0.52), vy = y / (FACE_H * 0.52);
-  const vig = 1 - Math.min(1, Math.pow(vx * vx + vy * vy, 1.4) * 0.55);
+  // THE MASK IS A ROUNDED RECTANGLE, not an oval. Mind, 2026-10-15: an
+  // oval shaved the corners off a portrait that wants to keep its
+  // shoulders, and a plain rectangle ended on a hard line. A rounded
+  // rect keeps the frame's shape and still has no corners to cliff off.
+  //
+  // Worked as a signed distance to the rounded box: negative inside,
+  // zero on the border, positive outside -- which is what makes the
+  // fade follow the shape instead of a radius. vx/vy are already in
+  // half-picture units, so the box half-extent is 1 and CORNER is how
+  // much of that is rounded away. RAMP is how far INSIDE the border the
+  // taper starts: brightness follows h, so a gradual distance IS the
+  // soft edge. Those two numbers are the only knobs here.
+  const CORNER = 0.38, RAMP = 0.16;
+  const ax = Math.abs(x / (FACE_W * 0.5)), ay = Math.abs(y / (FACE_H * 0.5));
+  const ex = ax - (1 - CORNER), ey = ay - (1 - CORNER);
+  const d = Math.hypot(Math.max(ex, 0), Math.max(ey, 0))
+          + Math.min(Math.max(ex, ey), 0) - CORNER;
+  const u = Math.max(0, Math.min(1, (d + RAMP) / RAMP));
+  const vig = 1 - u * u * (3 - 2 * u);
   // Lifted and stretched into the band the renderer actually uses for
   // brightness (roughly 0.22 upward), so midtones -- which is most of a
   // face -- are not all rounded down into the flat field.
@@ -326,8 +418,20 @@ function build() {
   for (let py = -H * 0.62; py <= H * 0.62; py += step) {
     for (let px = -W * 0.55; px <= W * 0.55; px += step) {
       const x = px / scale, y = py / scale;
-      const h = heightAt(x, y);
-      const on = h > 0;
+      // TWO LAYERS. The cutout's alpha decides which one a dot belongs
+      // to: inside the silhouette it is the HEAD and reads the
+      // photograph, outside it is BACKGROUND and reads nothing. The
+      // field still covers the whole frame -- the head is simply the
+      // only part of it carrying a picture, which is why a dark jaw no
+      // longer has to compete with a dark backdrop to be seen.
+      const av = alphaAt(x, y);
+      const inHead = av >= 0.35;
+      // How solidly this dot belongs to the head, 0 at the outer lip of
+      // the feather and 1 once it is properly inside. The renderer fades
+      // the rim out with it.
+      const edge = Math.max(0, Math.min(1, (av - 0.35) / 0.40));
+      const h = inHead ? heightAt(x, y) : 0;
+      const on = inHead && h > 0;
       // The gradient: how steep the surface is here, and which way it
       // faces. The spikes ride on this.
       let gx = 0, gy = 0;
@@ -348,14 +452,34 @@ function build() {
       // The jaw: everything below the mouth swings, most of it at the chin.
       const jaw = on ? Math.max(0, Math.min(1, (y - MOUTH_Y + 0.02) / 0.5)) : 0;
 
+      // WHICH DOTS ARE THE EYES, baked for the same reason the mouth is:
+      // the picture is static and a blink is not. `eye` is how much a dot
+      // belongs to an eye, `iris` the tighter core the gaze slides, and
+      // `eyeSide` which eye it is so the pair can move together.
+      const ey = y - EYE_Y;
+      let eye = 0, iris = 0, eyeSide = 0;
+      if (on) {
+        for (const sgn of [-1, 1]) {
+          const ex = x - (EYE_CX + sgn * EYE_DX);
+          // A LID IS WIDER THAN IT IS TALL. A round blob closing reads as
+          // a hole filling in; an oval reads as an eyelid.
+          const w = gauss(ex * ex, 0.105) * gauss(ey * ey, 0.055);
+          if (w > eye) { eye = w; eyeSide = sgn; }
+          iris = Math.max(iris, gauss(ex * ex, 0.055) * gauss(ey * ey, 0.045));
+        }
+      }
+
       dots.push({
         px, py, h: on ? h : 0, on,
-        lipU, lipL, hole, jaw,
+        lipU, lipL, hole, jaw, eye, iris, eyeSide,
         gx, gy, g: Math.min(2.2, Math.hypot(gx, gy)),
         // A per-dot phase so the idle drift and the scatter never move
         // as one slab.
         ph: Math.random() * Math.PI * 2,
         jx: (Math.random() - 0.5), jy: (Math.random() - 0.5),
+        // its own twinkle rate, so no two dots breathe together
+        tw: Math.random() * 0.8,
+        edge: on ? edge * edge * (3 - 2 * edge) : 0,   // smoothstep
       });
     }
   }
@@ -371,9 +495,89 @@ const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
 
 let last = performance.now(), t = 0;
 let present = 0;        // 0 = grid only, 1 = face fully forward
+
+/* ----------------------------- the signals ------------------------------- */
+// TRAFFIC ON THE GRID. The field breathes and twinkles, but nothing
+// TRAVELS across it, and a surface with no traffic reads as a screensaver
+// rather than as a machine with something going on inside it. These are
+// packets: each one runs a straight line across the field in face
+// coordinates, brightening the dots it passes and dragging a short tail.
+//
+// They are drawn by the dots themselves, not as lines over the top. A
+// stroke on top would sit in front of the head and give the whole thing a
+// pane of glass; a packet that can only light up dots it passes stays
+// inside the grid, and the head occludes it for free.
+const SIGNALS = 7;
+const signals_ = [];
+
+function spawnSignal(now) {
+  // Enter off one edge, leave by another: a packet that turns around
+  // inside the frame reads as a firefly, not a transmission.
+  const edge = Math.random() * 4 | 0;
+  const span = 2.4, out = 1.9;
+  const a = (Math.random() - 0.5) * span;
+  const from = [[-out, a], [out, a], [a, -out], [a, out]][edge];
+  const to = [[out, a + (Math.random() - 0.5)], [-out, a + (Math.random() - 0.5)],
+              [a + (Math.random() - 0.5), out], [a + (Math.random() - 0.5), -out]][edge];
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  const len = Math.hypot(dx, dy) || 1;
+  return {
+    x: from[0], y: from[1],
+    vx: dx / len, vy: dy / len,
+    speed: 0.9 + Math.random() * 1.9,     // field-widths a second
+    width: 0.055 + Math.random() * 0.075, // how far either side it lights
+    gain: 0.5 + Math.random() * 0.9,
+    born: now,
+    // A packet that never dies leaves the frame and keeps costing a
+    // distance check per dot per frame for ever.
+    dies: now + 14,
+  };
+}
+
+function updateSignals(now, dts) {
+  while (signals_.length < SIGNALS) signals_.push(spawnSignal(now));
+  for (let i = signals_.length - 1; i >= 0; i--) {
+    const g = signals_[i];
+    g.x += g.vx * g.speed * dts;
+    g.y += g.vy * g.speed * dts;
+    if (now > g.dies || Math.abs(g.x) > 2.2 || Math.abs(g.y) > 2.2) {
+      signals_[i] = spawnSignal(now);
+    }
+  }
+}
+
+// How much a point is lit by the traffic passing it. Distance to the
+// packet's LINE, not to the packet, so the light has a direction and a
+// tail instead of being a travelling blob.
+function signalAt(x, y) {
+  let lit = 0;
+  for (let i = 0; i < signals_.length; i++) {
+    const g = signals_[i];
+    const rx = x - g.x, ry = y - g.y;
+    const along = rx * g.vx + ry * g.vy;
+    // only behind the head of the packet: that is what makes it a tail
+    if (along > 0.02 || along < -0.9) continue;
+    const perp = Math.abs(rx * -g.vy + ry * g.vx);
+    if (perp > g.width) continue;
+    const across = 1 - perp / g.width;
+    const tail = 1 + along / 0.9;          // 1 at the head, 0 at the end
+    lit += g.gain * across * across * tail * tail;
+  }
+  return lit;
+}
 let scatter = 0;        // thinking: the grid comes apart
 let ripple = -1;        // listening: a ring travelling outward
 let open = 0;           // speaking: how far the mouth is open, 0..1
+// THE EYES. Added 2026-10-15, and the reason is not decoration: the mouth
+// was doing the whole job, which is backwards from how anyone reads a
+// face. Nobody notices mouth accuracy; everybody notices dead eyes.
+let blink = 0;          // 0 open, 1 shut
+let blinkAt = 1.2;      // when the next one fires, in seconds on t
+let gazeX = 0, gazeY = 0;         // where the eyes are actually pointed
+let gazeTX = 0, gazeTY = 0;       // where they are heading
+let gazeAt = 0.8;       // when the gaze next picks a new place to rest
+let heard = 0;          // a smoothed version of the mic, 0..1
+let ringPhase = 0;      // how far the voice rings have travelled outward
 
 // THE FACE SITS BETWEEN THE PANELS, not in the middle of the window.
 // The transcript owns the bottom quarter of the screen and the activity
@@ -439,14 +643,73 @@ function frame(now) {
   const wantOpen = state === "speaking" ? Math.min(1, env * 1.4) : 0;
   open += (wantOpen - open) * Math.min(1, dt / (wantOpen > open ? 55 : 160));
 
+  // BLINKING, ON AN IRREGULAR CLOCK. A blink on a fixed timer reads as a
+  // metronome within about twenty seconds -- the eye is very good at
+  // catching a period. So the gap is random between roughly two and seven
+  // seconds, and now and then it fires a double, which is what real eyes
+  // do. The close is fast and the open is slower, like a real lid.
+  if (t > blinkAt) {
+    blink = 1;
+    blinkAt = t + 2.0 + Math.random() * 5.0;
+    if (Math.random() < 0.18) blinkAt = t + 0.22;   // the occasional double
+  }
+  blink += (0 - blink) * Math.min(1, dt / 95);
+
+  // GAZE DRIFT. A face that holds one stare is a photograph; a face whose
+  // eyes settle somewhere new every few seconds is somebody thinking. It
+  // comes home to centre while speaking -- he is being looked at then,
+  // and wandering eyes mid-sentence read as evasive rather than alive.
+  if (t > gazeAt) {
+    gazeAt = t + 1.4 + Math.random() * 3.2;
+    gazeTX = (Math.random() - 0.5) * 1.6;
+    gazeTY = (Math.random() - 0.5) * 0.9;
+  }
+  const home = state === "speaking" ? 0.12 : 1;
+  gazeX += (gazeTX * home - gazeX) * Math.min(1, dt / 220);
+  gazeY += (gazeTY * home - gazeY) * Math.min(1, dt / 260);
+
+  // WHAT MIND'S VOICE DOES TO THE FIELD. Mind, 2026-10-15: "when I talk,
+  // I want some kind of animation of the dots in the background."
+  // The raw mic is jittery enough to strobe, so it is smoothed -- fast up
+  // so the field answers the first syllable, slow down so it does not
+  // flicker between words -- and drives rings that run outward from the
+  // face continuously while he is talking, rather than the single ping
+  // the old listening ripple fired once per utterance.
+  // WHERE THE LEVEL COMES FROM. Not the browser: opening the mic here
+  // takes the device from backtalk and the voice line goes deaf
+  // (2026-10-15). Instead the process that already owns the microphone
+  // publishes its own measured loudness to the bus, and the face reads it.
+  // The mic level is REAL now -- backtalk's ears publish it to the bus, so
+  // the rings answer the actual room instead of the fake sine that stood in
+  // for it. The field only moves while the line is open to him: a level
+  // arriving during "speaking" is this machine's own voice leaking into the
+  // microphone, and the mouth already draws that.
+  const wantHeard = (state === "listening" || state === "idle") ? mic : 0;
+  heard += (wantHeard - heard) * Math.min(1, dt / (wantHeard > heard ? 90 : 420));
+  ringPhase += (dt / 1000) * (0.35 + 1.5 * heard);
+
   const breath = 0.5 + 0.5 * Math.sin(t * 0.9);
+  // IDLE BREATHING, and deliberately a slow one: about five and a half
+  // seconds a cycle, which is a resting human breath rather than the
+  // panting that anything faster reads as. It fades out as the face comes
+  // forward -- a head that keeps breathing while it talks looks like it
+  // is bobbing, not alive.
+  const idleBreath = Math.sin(t * 1.15) * (1 - present * 0.75);
+
+  // The traffic runs on wall-clock seconds, so it keeps its speed if the
+  // tab is throttled and resumes instead of teleporting.
+  updateSignals(t, Math.min(0.05, dt / 1000));
   // A SLOW WAVE down the face, always running. Idle used to be a breath
   // so gentle the whole thing read as a still image -- "it's not moving
   // right now, do I need to restart something?" -- which is the worst
   // thing a live face can look like. This is what says it is running.
   const waveY = (t * 0.22) % 2 - 0.5;
   const push = scale * (0.012 + 0.014 * present + 0.030 * env);
-  const spikeLen = scale * (0.020 + 0.030 * present + 0.075 * env);
+  // TAILS, SHORTER WHEN SPEAKING. The voice term used to be the biggest
+  // of the three, so every syllable threw hair off the whole head and the
+  // features vanished underneath it. The spikes now describe the face
+  // first and the voice second.
+  const spikeLen = scale * (0.020 + 0.030 * present + 0.022 * env);
 
   for (const d of dots) {
     let px = d.px, py = d.py;
@@ -462,12 +725,68 @@ function frame(now) {
       // as EMERGING from a grid rather than floating on black.
       let a = 0.17 + 0.07 * Math.sin(t * 0.7 + d.ph)
             + 0.10 * Math.exp(-Math.pow((py / scale) - waveY, 2) / 0.08);
+
+      // A CROSS-CURRENT, always running. The downward wave alone moves
+      // every dot in a row together, which reads as a scanline. A second,
+      // slower diagonal at an odd frequency never repeats against it, so
+      // the field drifts instead of scanning -- alive in dead silence,
+      // which is most of the time this face is on screen.
+      const dx = px / scale, dy = py / scale;
+      a += 0.055 * Math.sin((dx * 1.7 + dy * 1.1) - t * 0.31);
+      // and a slow bloom breathing out from the middle, so the grid has
+      // depth as well as drift
+      a += 0.045 * Math.sin(Math.hypot(dx, dy) * 2.1 - t * 0.47);
+
+      // EACH DOT ON ITS OWN CLOCK. Everything above moves the field as a
+      // body; this is what stops it reading as a mechanism. Two sines at
+      // rates that share no common multiple, seeded off the dot's own
+      // phase, never line up twice -- cheaper than a noise function and
+      // indistinguishable at this amplitude.
+      // Multiplying two sines was the mistake: the product sits near zero
+      // most of the time, so the amplitude on paper was never the
+      // amplitude on screen. One sine carries the twinkle, the slower one
+      // only shapes how deep it goes.
+      a += 0.17 * Math.sin(t * (1.4 + d.tw * 1.6) + d.ph * 5.1)
+         * (0.55 + 0.45 * Math.sin(t * 0.31 + d.ph));
+
+      // THE VOICE RINGS. Distance from the face decides a dot's place in
+      // the wave, so the whole field reads as one thing moving outward
+      // instead of eight thousand dots blinking independently. Each ring
+      // both brightens its dots and pushes them a little further out --
+      // brightness alone reads as a flicker; the small displacement is
+      // what makes it read as a wave crossing the grid.
+      const rN = Math.hypot(px, py) / scale;
+      // AND A LITTLE WANDER. Held well under the dot spacing: past that
+      // the lattice stops reading as a lattice and the whole field turns
+      // to static.
+      px += d.jx * scale * 0.012 * Math.sin(t * (0.5 + d.tw * 0.6) + d.ph);
+      py += d.jy * scale * 0.012 * Math.cos(t * (0.4 + d.tw * 0.7) + d.ph * 1.7);
+      let bx = px, by = py;
+      if (heard > 0.02) {
+        const wave = Math.sin(rN * 5.2 - ringPhase * 6.0);
+        const reach = Math.max(0, 1 - rN / 2.6);     // fades off the edges
+        const amp = heard * reach;
+        a += 0.42 * amp * Math.max(0, wave);
+        const shove = amp * wave * scale * 0.035;
+        bx += (px / (rN * scale || 1)) * shove;
+        by += (py / (rN * scale || 1)) * shove;
+      }
+
+      // The old single ping stays for the moment listening BEGINS: the
+      // rings describe how loud he is, this says the line just opened.
       if (ripple >= 0) {
         const rr = Math.hypot(px, py) / (scale * 1.6);
         a += 0.45 * Math.max(0, 1 - Math.abs(rr - ripple) * 9) * mic;
       }
+      // THE TRAFFIC. A packet passing lifts a dot well above the field,
+      // which is what makes it read as a signal rather than a ripple --
+      // the field is a texture, this is an event.
+      const lit = signalAt(dx, dy);
+      a += 0.55 * lit;
+      const sz = 2 + (heard > 0.02 ? Math.round(heard * 1.6) : 0)
+                   + (lit > 0.55 ? 1 : 0);
       ctx.fillStyle = rgba(CRIMSON, Math.max(0, a));
-      ctx.fillRect(cx + px - 1, cy + py - 1, 2, 2);
+      ctx.fillRect(cx + bx - sz / 2, cy + by - sz / 2, sz, sz);
       continue;
     }
 
@@ -483,6 +802,24 @@ function frame(now) {
       h += (d.lipU + d.lipL) * open * 0.08;                   // lips catch light
     }
 
+    // THE EYES CLOSE, AND THEY LOOK AROUND.
+    //
+    // A blink is drawn by FILLING THE SOCKET IN rather than by drawing a
+    // lid over it. The dark hollow IS the eye here -- it is what the
+    // photograph's shadow gives us -- so lifting those dots up to the
+    // brightness of the skin around them erases the eye for a moment,
+    // which is exactly what a closed lid looks like. Nothing is added to
+    // the scene; a feature is briefly taken out of it.
+    if (blink > 0.01) h += d.eye * blink * 0.42;
+    // The gaze slides the iris's dots sideways within the socket. Only a
+    // few pixels -- it is a long way under the dot spacing, so the
+    // lattice holds and the likeness with it, and the dark core moving
+    // inside a fixed socket is read as a pupil every time.
+    if (d.iris > 0.004) {
+      px += d.iris * gazeX * scale * 0.026;
+      py += d.iris * gazeY * scale * 0.016;
+    }
+
     // Depth does the work: out from centre, bigger, brighter.
     // The wave adds a little depth as it passes, so a band of the face
     // lifts and settles like something breathing under a sheet.
@@ -495,7 +832,10 @@ function frame(now) {
     // the only thing this face has -- goes with it. Here the dots hold
     // their lattice like a halftone and let brightness and size carry
     // the picture, with just enough drift to read as three-dimensional.
-    const k = 1 + lift * 0.05;
+    // The breath itself: the whole head swells a little and settles,
+    // around its own centre, so it reads as the chest behind it rather
+    // than as the picture zooming.
+    const k = (1 + lift * 0.05) * (1 + idleBreath * 0.011);
     const x = cx + px * k + (px / scale) * push * lift;
     const y = cy + py * k + (py / scale) * push * lift;
 
@@ -508,15 +848,21 @@ function frame(now) {
     // because its heights bunched between 0.22 and 0.84; a levelled
     // photograph already spans the range, and re-squeezing it threw away
     // most of the face's midtones.
+    // The traffic crosses the head as well, but at a fraction of its
+    // strength on the field: the likeness is the only thing this face
+    // has, and a bright packet running over it erases a cheekbone.
+    const litF = signalAt(d.px / scale, d.py / scale) * 0.30;
     const depth = Math.max(0, Math.min(1, h * 1.05));
-    const near = depth * (0.35 + 0.65 * present);
+    const near = depth * (0.35 + 0.65 * present) * (1 + idleBreath * 0.045);
     // A WIDE SWING between shadow and highlight is the whole trick: in
     // the reference, dark areas carry almost no dots and lit ones carry
     // big bright ones. A uniform dot over the whole face reads as a
     // blob however well it is sampled.
-    const a = (0.11 + 1.45 * near) * (1 + 0.22 * wv);
+    const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF) * d.edge;
     const col = mix(CRIMSON, HOT, Math.min(1, near * (0.70 + 0.70 * env)));
-    const r = 0.35 + 3.1 * near;
+    // The rim's dots shrink as well as dim. Fading alone leaves a ring
+    // of full-sized ghosts and still reads as a cut line.
+    const r = (0.35 + 3.1 * near) * (0.45 + 0.55 * d.edge);
 
     // The spikes: thrown off the steep parts, pointing the way the
     // surface falls away. This is the whole character of the reference
@@ -524,15 +870,31 @@ function frame(now) {
     // ONLY THE STEEP PARTS. The first version spiked everywhere and the
     // face came out as a hairy egg: the rim, the sockets and the nose
     // wall are where the surface actually falls away.
+    // SHADING, NOT HAIR. These were strokes: a line thrown down the
+    // gradient off every steep dot. On the hand-built dome that read as
+    // character, but on a photograph the steep parts are the eye sockets,
+    // the nose wall and the jaw -- exactly the features -- so at a whole
+    // head's scale thousands of one-pixel lines crossed each other and
+    // came out as bristles growing out of the face (Mind's screenshot,
+    // 2026-10-15). Same gradient, same direction, drawn instead as two or
+    // three smaller, dimmer dots stepping down it. A dot cannot cross its
+    // neighbour, so the shading stays a tone rather than a texture.
     if (d.g > 1.15 && present > 0.15) {
       const L = spikeLen * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
       const n = Math.hypot(d.gx, d.gy) || 1;
-      ctx.strokeStyle = rgba(col, 0.12 + 0.34 * present);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - (d.gx / n) * L, y - (d.gy / n) * L);
-      ctx.stroke();
+      const ux = -(d.gx / n) * L, uy = -(d.gy / n) * L;
+      const steps = L > scale * 0.030 ? 3 : 2;
+      for (let i = 1; i <= steps; i++) {
+        const f = i / steps;
+        // each step out is dimmer and smaller, so the run fades into the
+        // surface instead of ending on a hard last dot
+        const fade = (1 - f * 0.72) * (0.10 + 0.26 * present) * d.edge;
+        ctx.fillStyle = rgba(col, Math.max(0, fade));
+        ctx.beginPath();
+        ctx.arc(x + ux * f, y + uy * f, Math.max(0.3, r * (0.42 - 0.12 * f)),
+                0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     ctx.fillStyle = rgba(col, a);
@@ -551,6 +913,14 @@ function frame(now) {
 
   requestAnimationFrame(frame);
 }
+
+// NO BROWSER MIC. core.js can open the microphone itself (`{mic:true}`),
+// and it does make AV.micLevel real -- but on this machine the browser
+// taking the device stopped BACKTALK from hearing Mind at all, which
+// trades a background animation for the entire voice line. Never worth
+// it. The field is driven from the voice line's own state instead; see
+// the rings in the render loop.
+AV.init({});
 
 resize();
 // The photo arrives late, so the grid is built twice: once empty, once for

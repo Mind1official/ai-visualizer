@@ -31,7 +31,7 @@
      AV.samples    Float32Array(64), 0..1 normalized waveform ring
      AV.alert      bool, optional attention signal
      AV.compacting bool, true while the context window is being compacted
-     AV.micLevel   0..1 your microphone (only if init({mic:true}))
+     AV.micLevel   0..1 the microphone, from the voice line's own ears
      AV.name       display name from config ("JARVIS" by default)
      AV.label      the dotted chip label ("J.A.R.V.I.S.")
      AV.badge      optional handle from config ("" by default)
@@ -221,6 +221,11 @@ const AV = (() => {
     // wants to draw it reads AV.rateLimits; every other face ignores it.
     A.rateLimits = raw.rate_limits || {};
     A.level = raw.level || 0;
+    // OUR FORK: the bus carries a real microphone level now, measured by
+    // the voice line itself. init({mic:true}) still works and wins if a
+    // face asks for it, but no face should: taking the mic in the browser
+    // starves the voice line of the device (2026-10-15).
+    if (!A._micAnalyser) A.micLevel = raw.mic || 0;
     // OUR FORK: non-empty = the agent is waiting on a typed answer, and the
     // string is the question. promptUpdate() owns the input box; a face can
     // also read AV.prompt if it wants to react in its own visuals.

@@ -325,6 +325,18 @@ def read_bus():
             level = min(1.0, mean / 3000.0)
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    # THE ROOM'S OWN LOUDNESS. Written by backtalk's ears loop, which is
+    # the one process holding the microphone -- opening the mic in the
+    # browser instead takes the device from it and the voice line dies
+    # (2026-10-15). Already normalised 0..1 and stamped, so a stale file
+    # from a dead voice line reads as silence rather than a stuck needle.
+    mic = 0.0
+    try:
+        payload = json.loads((BUS / ".voice_mic").read_text())
+        if time.time() - float(payload.get("ts", 0)) < 0.5:
+            mic = max(0.0, min(1.0, float(payload.get("level", 0.0))))
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     try:
         alert = (BUS / ".voice_alert").stat().st_size > 0
     except OSError:
@@ -378,6 +390,7 @@ def read_bus():
     # gate looks exactly like a broken microphone.
     answer_only = (BUS / ".voice_answeronly").exists()
     return {"state": state, "level": level, "samples": samples,
+            "mic": mic,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
             "compacting": compacting, "music": music, "bands": bands,
             "prompt": prompt, "remote": remote,
@@ -839,7 +852,7 @@ class Handler(BaseHTTPRequestHandler):
 # app was installed); it's keyed to the Chrome profile, not this machine, so
 # it travels across machines signed into the same profile.
 CHROME_PROXY = Path(r"C:\Program Files\Google\Chrome\Application\chrome_proxy.exe")
-CHROME_APP_ID = "pfhngcmbfeloekfgoeblabklkjhmadjp"
+CHROME_APP_ID = "amchpcejmhglkphhblpdneejegjllnio"
 CHROME_PROFILE = "Profile 4"
 
 

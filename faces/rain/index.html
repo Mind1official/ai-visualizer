@@ -57,7 +57,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 const Q=new URLSearchParams(location.search);
 const SHOT=Q.get("shot");
-AV.init({mic:true});
+// NO BROWSER MIC. Taking the audio device here starves the voice line and
+// it goes deaf -- a background animation for the whole conversation, never
+// worth it (twice on 2026-10-15, the second time from a stray tab). The mic
+// level arrives on the bus instead, measured by the process that owns the
+// device, so AV.micLevel is real without this face asking for anything.
+AV.init({});
 
 const GLYPH_PX=20, FACE_GLYPH_PX=12, TIERS=16;
 const GREEN=[0,255,70], HEAD=[205,255,205], AMBER=[255,176,64], RED=[255,46,46];

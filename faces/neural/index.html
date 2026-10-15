@@ -65,7 +65,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 const Q=new URLSearchParams(location.search);
 const SHOT=Q.get("shot");
-AV.init({mic:true});
+// NO BROWSER MIC. Taking the audio device here starves the voice line and
+// it goes deaf -- a background animation for the whole conversation, never
+// worth it (twice on 2026-10-15, the second time from a stray tab). The mic
+// level arrives on the bus instead, measured by the process that owns the
+// device, so AV.micLevel is real without this face asking for anything.
+AV.init({});
 AV.ready(a=>{document.title=a.name+" Neural Core";});
 
 const U=AV.util;
