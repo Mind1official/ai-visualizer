@@ -29,6 +29,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      are the FACE's job, not core.js's, so a new face starts blank. These
      are shared with any future face rather than copied into each one. -->
 <link rel="stylesheet" href="../_shared/hud.css">
+<style>
+  /* MUSIC MODE: the chat and the gauges step aside so the corona has the
+     screen. Faded rather than removed, so the layout -- and therefore the
+     face's centre, which is fitted between the panels -- holds still.
+     After the HUD stylesheet on purpose: it loads last and would
+     otherwise win. */
+  #transcript-panel,#usage-gauge,#context-gauge{transition:opacity 1s ease}
+  body.music #transcript-panel,body.music #usage-gauge,
+  body.music #context-gauge{opacity:0!important;pointer-events:none!important;
+    transition:opacity 1s ease!important}
+</style>
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -579,6 +590,72 @@ let gazeAt = 0.8;       // when the gaze next picks a new place to rest
 let heard = 0;          // a smoothed version of the mic, 0..1
 let ringPhase = 0;      // how far the voice rings have travelled outward
 
+// MUSIC MODE. backtalk's ears already measure a 32-band spectrum of what
+// the room is playing and publish it to the bus (music.py -> .voice_music
+// -> AV.music / AV.bands), so the face does NOT open the microphone --
+// the music arrives on the same device backtalk owns, and taking that
+// device kills the voice line outright (2026-10-15). The Radial has had a
+// music mode since; this is the Portrait's.
+//
+// The bus refreshes about eight times a second and the screen draws
+// sixty, so every band is eased toward its reading rather than used raw:
+// fast up so the kick lands on the frame it happens, slower down so the
+// corona falls instead of flickering.
+const BANDS = 32;
+const musicMags = new Float32Array(BANDS);
+let musicT = 0;         // 0 = voice face, 1 = fully in music mode
+let bass = 0, kick = 0; // smoothed low end, and the transient off it
+let spin = 0;           // the corona turns, slowly, and faster on the kick
+
+function musicLive() {
+  // Her own voice wins: if she is talking or thinking, that is the thing
+  // worth drawing, and the "music" she can hear then is her own output
+  // bleeding back into the mic.
+  const st = AV.state;
+  return !!AV.music && st !== "speaking" && st !== "thinking";
+}
+
+function readBands(dt) {
+  const live = musicLive();
+  const b = (live && AV.bands) || [];
+  for (let k = 0; k < BANDS; k++) {
+    const target = live ? (b[k] || 0) : 0;
+    const rate = target > musicMags[k] ? 0.55 : 0.16;
+    musicMags[k] += (target - musicMags[k]) * Math.min(1, rate * dt / 16.667);
+  }
+  // The low four bands are the kick and the bass line; everything the
+  // head's pulse rides on comes from here.
+  let lo = 0;
+  for (let k = 0; k < 4; k++) lo += musicMags[k];
+  lo /= 4;
+  const prev = bass;
+  bass += (lo - bass) * Math.min(1, dt / 70);
+  // A transient, not a level: what makes a beat read as a HIT is the
+  // jump, so the kick is the rise and it decays on its own clock.
+  kick = Math.max(kick - dt / 260, Math.max(0, bass - prev) * 6);
+  kick = Math.min(1, kick);
+  musicT += ((live ? 1 : 0) - musicT) * Math.min(1, dt / 420);
+  spin += (dt / 1000) * (0.05 + 0.9 * bass);
+}
+
+// Which band a point in the field belongs to. The corona is a POLAR
+// spectrum: angle picks the band, so the field around her head becomes a
+// ring of bars that dance -- the low end at the top and climbing round.
+// Using radius instead was the first idea and it reads as a target, not
+// as music.
+function bandAt(dx, dy) {
+  let ang = Math.atan2(dy, dx) + Math.PI / 2 + spin;
+  ang = ((ang % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  // mirrored: the spectrum runs up one side and back down the other, so
+  // the corona is symmetrical rather than having a visible seam
+  const h = ang / Math.PI;                       // 0..2
+  const u = h <= 1 ? h : 2 - h;                  // 0..1..0
+  const i = u * (BANDS - 1);
+  const k = Math.floor(i), f = i - k;
+  const a = musicMags[k] || 0, bq = musicMags[Math.min(BANDS - 1, k + 1)] || 0;
+  return a + (bq - a) * f;
+}
+
 // THE FACE SITS BETWEEN THE PANELS, not in the middle of the window.
 // The transcript owns the bottom quarter of the screen and the activity
 // strip owns the top edge -- centring on the window put the mouth and
@@ -611,12 +688,16 @@ function frame(now) {
   const state = AV.state || "idle";
   const env = AV.env || 0;            // speech envelope, 0..1
   const mic = AV.micLevel || 0;
+  readBands(dt);
 
   // The face comes forward to speak and retreats the rest of the time --
   // the same idea as the Radial's orb, and the reason this does not just
   // sit there staring all day.
-  const want = state === "speaking" ? 1 : state === "listening" ? 0.62
-             : state === "thinking" ? 0.34 : 0.54;
+  let want = state === "speaking" ? 1 : state === "listening" ? 0.62
+           : state === "thinking" ? 0.34 : 0.54;
+  // Music mode brings her forward and lets the low end move her: she is
+  // not waiting for an instruction, she is listening to the track.
+  if (musicT > 0.01) want = want * (1 - musicT) + musicT * (0.70 + 0.30 * bass);
   present += (want - present) * Math.min(1, dt / (want > present ? 180 : 420));
   scatter += ((state === "thinking" ? 1 : 0) - scatter) * Math.min(1, dt / 500);
 
@@ -632,7 +713,8 @@ function frame(now) {
   const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.55);
   // Dimmer than the Mask's: a photograph's shadows ARE the drawing, and
   // a bloom behind them fills the very gaps that make the face read.
-  glow.addColorStop(0, rgba(CRIMSON, 0.07 + 0.07 * present + 0.08 * env));
+  glow.addColorStop(0, rgba(CRIMSON,
+    0.07 + 0.07 * present + 0.08 * env + musicT * (0.10 * bass + 0.14 * kick)));
   glow.addColorStop(1, "rgba(7,4,5,0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
@@ -778,13 +860,33 @@ function frame(now) {
         const rr = Math.hypot(px, py) / (scale * 1.6);
         a += 0.45 * Math.max(0, 1 - Math.abs(rr - ripple) * 9) * mic;
       }
+      // THE CORONA. In music mode the field stops being a texture and
+      // becomes the spectrum: each dot asks which band owns its angle,
+      // and that band both brightens it and throws it outward. Because
+      // the push grows with radius, the inner dots hold their lattice
+      // around her head and the outer ones fly -- so it reads as bars
+      // radiating off her rather than the whole grid inflating.
+      if (musicT > 0.01) {
+        const m = bandAt(dx, dy);
+        const reach = Math.min(1, rN / 0.75);       // leaves her face alone
+        const amp = musicT * m * reach;
+        a += 0.70 * amp;
+        const shove = amp * scale * (0.16 + 0.10 * kick);
+        const ux = px / (rN * scale || 1), uy = py / (rN * scale || 1);
+        bx += ux * shove; by += uy * shove;
+        // and the kick snaps the whole field out a touch, all at once
+        bx += ux * musicT * kick * scale * 0.035;
+        by += uy * musicT * kick * scale * 0.035;
+      }
+
       // THE TRAFFIC. A packet passing lifts a dot well above the field,
       // which is what makes it read as a signal rather than a ripple --
       // the field is a texture, this is an event.
       const lit = signalAt(dx, dy);
       a += 0.55 * lit;
       const sz = 2 + (heard > 0.02 ? Math.round(heard * 1.6) : 0)
-                   + (lit > 0.55 ? 1 : 0);
+                   + (lit > 0.55 ? 1 : 0)
+                   + (musicT > 0.3 && bandAt(dx, dy) > 0.6 ? 1 : 0);
       ctx.fillStyle = rgba(CRIMSON, Math.max(0, a));
       ctx.fillRect(cx + bx - sz / 2, cy + by - sz / 2, sz, sz);
       continue;
@@ -835,7 +937,11 @@ function frame(now) {
     // The breath itself: the whole head swells a little and settles,
     // around its own centre, so it reads as the chest behind it rather
     // than as the picture zooming.
-    const k = (1 + lift * 0.05) * (1 + idleBreath * 0.011);
+    // THE HEAD RIDES THE BEAT. A small swell on the kick -- about two per
+  // cent -- which is the difference between a face in front of music and
+  // a face listening to it. Anything larger reads as a bouncing photo.
+  const k = (1 + lift * 0.05) * (1 + idleBreath * 0.011)
+            * (1 + musicT * (0.012 * bass + 0.016 * kick));
     const x = cx + px * k + (px / scale) * push * lift;
     const y = cy + py * k + (py / scale) * push * lift;
 
@@ -852,14 +958,26 @@ function frame(now) {
     // strength on the field: the likeness is the only thing this face
     // has, and a bright packet running over it erases a cheekbone.
     const litF = signalAt(d.px / scale, d.py / scale) * 0.30;
+    // THE MUSIC CROSSES HER FACE TOO. The corona needs empty field to
+    // live in, and at the size she is usually drawn there barely is any
+    // -- the head fills the frame. So the spectrum also plays ON the
+    // portrait: the band owning a dot's angle lifts it and lengthens the
+    // shading run off it, so bars of light sweep the face and the steep
+    // parts bristle on the loud bands. Held small on purpose: the
+    // likeness is the only thing this face has, and a spectrum painted
+    // over it at full strength erases a cheekbone.
+    const mF = musicT > 0.01
+      ? musicT * bandAt(d.px / scale, d.py / scale) : 0;
     const depth = Math.max(0, Math.min(1, h * 1.05));
-    const near = depth * (0.35 + 0.65 * present) * (1 + idleBreath * 0.045);
+    const near = depth * (0.35 + 0.65 * present) * (1 + idleBreath * 0.045)
+                 * (1 + mF * 0.55);
     // A WIDE SWING between shadow and highlight is the whole trick: in
     // the reference, dark areas carry almost no dots and lit ones carry
     // big bright ones. A uniform dot over the whole face reads as a
     // blob however well it is sampled.
     const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF) * d.edge;
-    const col = mix(CRIMSON, HOT, Math.min(1, near * (0.70 + 0.70 * env)));
+    const col = mix(CRIMSON, HOT,
+    Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick)));
     // The rim's dots shrink as well as dim. Fading alone leaves a ring
     // of full-sized ghosts and still reads as a cut line.
     const r = (0.35 + 3.1 * near) * (0.45 + 0.55 * d.edge);
@@ -880,7 +998,8 @@ function frame(now) {
     // three smaller, dimmer dots stepping down it. A dot cannot cross its
     // neighbour, so the shading stays a tone rather than a texture.
     if (d.g > 1.15 && present > 0.15) {
-      const L = spikeLen * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
+      const L = spikeLen * (1 + mF * 2.2)
+                * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
       const n = Math.hypot(d.gx, d.gy) || 1;
       const ux = -(d.gx / n) * L, uy = -(d.gy / n) * L;
       const steps = L > scale * 0.030 ? 3 : 2;
@@ -902,6 +1021,11 @@ function frame(now) {
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
+
+  // The Radial hides its panels in music mode behind body.music; same
+  // class here, so the CSS above can do the same without the face
+  // knowing anything about the HUD.
+  document.body.classList.toggle("music", musicT > 0.05);
 
   // An alert turns the whole field cold-hot: the one thing that must not
   // be subtle.
