@@ -1242,7 +1242,12 @@ function drawChips(t) {
      panel is not in the page at all, so a face without the HUD still
      shows its statuses somewhere sane. */
   const panel = document.getElementById("transcript-panel");
-  const top = panel ? panel.getBoundingClientRect().top : H - h * 2;
+  const box = panel ? panel.getBoundingClientRect() : null;
+  /* ON THE OBS OVERLAY THE TRANSCRIPT IS HIDDEN, and a display:none box
+     measures zero -- which would stick the row in the top-left corner.
+     A hidden panel means there is no chat to sit above, so the row takes
+     the bottom margin it would have had anyway. */
+  const top = box && box.height > 0 ? box.top : H - h;
   const y = Math.round(Math.max(8, top - h - Math.max(10, h * 0.45)));
 
   live.forEach((k, i) => {

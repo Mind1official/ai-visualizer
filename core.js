@@ -86,7 +86,7 @@ const AV = (() => {
   // whole bug the first time round -- the cards I hid were not the cards on
   // screen. A face opts in simply by using those ids.
   const HIDE = new Set(
-    (Q.get("obs") === "1" ? "lists,vitals,watcher,input,transcript,usage,activity," : "")
+    (Q.get("obs") === "1" ? "lists,vitals,watcher,input,transcript,usage,activity,health," : "")
       .concat(Q.get("hide") || "")
       .split(",").map(x => x.trim().toLowerCase()).filter(Boolean));
   const hidden = (what) => HIDE.has(what);
@@ -104,6 +104,9 @@ const AV = (() => {
     transcript: "#transcript-panel",
     usage: "#usage-gauge, #context-gauge",   // plan spend AND context gauge
     activity: "#activity-panel",             // what the agent is doing, live
+    // Stack health is a mechanic's gauge: DOWN services by name, which is
+    // both clutter and a small map of the rig for anybody watching.
+    health: "#health-gauge",
   };
   function obsHideFaceParts() {
     for (const [what, sel] of Object.entries(FACE_PARTS)) {
