@@ -95,7 +95,11 @@ const ctx = cvs.getContext("2d", { alpha: false });
 
 let W = 0, H = 0, DPR = 1;
 function resize() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  // PINNED TO 1, DELIBERATELY. At 2 this canvas paints four times the
+  // pixels the screen shows, and the face is tens of thousands of
+  // overlapping soft dots -- it is pure fill rate. On a dot field the
+  // softness is invisible; the full core it cost was not (2026-10-15).
+  DPR = 1;
   W = innerWidth; H = innerHeight;
   cvs.width = W * DPR; cvs.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -513,9 +517,24 @@ function heightAt(x, y) {
  * frame for an answer that is already known. */
 
 let dots = [], scale = 1, cx = 0, cy = 0;
-const STEP = 5;              // pixels between dots at 1x. Finer than the
-                             // hand-built Mask: a photograph carries detail
-                             // worth resolving, where a gaussian dome did not.
+// LIGHT MODE: ?light=1 on the URL (2026-10-15).
+//
+// OBS pulls this face over a URL from the STREAMING machine and then
+// shows it at a fraction of its size in the corner of a scene. It was
+// rendering every dot and every shading run of the full-fat face to do
+// it, and the overlay lagged. This strips the detail nobody can see at
+// overlay size: coarser dots, no shading runs, fewer frames. Mind's
+// local face is untouched -- the flag is per-URL, not per-build.
+const LIGHT = new URLSearchParams(location.search).has("light")
+              && new URLSearchParams(location.search).get("light") !== "0";
+
+const STEP = LIGHT ? 11 : 7;              // pixels between dots at 1x. A photograph
+                             // carries detail worth resolving, where the
+                             // hand-built Mask's gaussian dome did not --
+                             // but 5 cost about half a core on its own, and
+                             // OBS pulls this face over a URL from another
+                             // machine, so it is rendered TWICE and every
+                             // dot is paid for twice (2026-10-15).
 
 // ONE SIZE CONSTANT, USED BY BOTH ENDS. The lattice is laid out ONCE at
 // build time against `scale`, and the frame loop recomputes `scale` every
@@ -741,6 +760,46 @@ const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
                           a[2] + (b[2] - a[2]) * t];
 
+// THE DOT SPRITE ATLAS (2026-10-15)
+//
+// Every dot used to cost `ctx.beginPath(); ctx.arc(); ctx.fill()` plus a
+// freshly BUILT `rgba(...)` string -- and the steep dots drew two or three
+// more of each for their shading run. At tens of thousands of dots a frame
+// that is a full core of one machine, measured: Chrome at 144% with the
+// face up and 34% with it closed.
+//
+// A circle of a known colour is a picture. So each tint is drawn ONCE into
+// its own little canvas and from then on every dot is a single drawImage
+// with globalAlpha -- no path, no fill, and no string allocated per dot
+// per frame. Alpha stays per-dot because it carries the shading; only the
+// HUE is quantised, across a ramp the eye cannot step anyway.
+const TINTS = 16;              // crimson -> hot, quantised
+const SPRITE_R = 16;           // sprite radius in px; dots are drawn smaller
+const SPRITES = (() => {
+  const out = [];
+  for (let i = 0; i < TINTS; i++) {
+    const c = mix(CRIMSON, HOT, i / (TINTS - 1));
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = SPRITE_R * 2;
+    const g = cv.getContext("2d");
+    g.fillStyle = `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+    g.beginPath();
+    g.arc(SPRITE_R, SPRITE_R, SPRITE_R, 0, Math.PI * 2);
+    g.fill();
+    out.push(cv);
+  }
+  return out;
+})();
+
+/** Draw one dot from the atlas. `t` is 0..1 along crimson -> hot. */
+function sprite(x, y, r, t, a) {
+  if (a <= 0.004 || r <= 0.05) return;   // below this nothing reaches the eye
+  const i = t <= 0 ? 0 : t >= 1 ? TINTS - 1 : (t * (TINTS - 1) + 0.5) | 0;
+  ctx.globalAlpha = a > 1 ? 1 : a;
+  ctx.drawImage(SPRITES[i], x - r, y - r, r * 2, r * 2);
+}
+
+
 let last = performance.now(), t = 0;
 let present = 0;        // 0 = grid only, 1 = face fully forward
 
@@ -933,7 +992,23 @@ function fitBetweenPanels() {
   scale = fit.scale;
 }
 
+// FRAME RATE IS CAPPED, DELIBERATELY. requestAnimationFrame runs at the
+// monitor's refresh -- 120 or 144 here -- and this face is expensive
+// enough that it ran at better than a core, lagging the OBS overlay and
+// starving the audio callback that feeds the voice line. A dot field
+// animates perfectly well at 30, and the cost is linear in frames drawn.
+// Mind's call, 2026-10-15.
+const FPS_CAP = LIGHT ? 24 : 30;
+const MIN_FRAME_MS = 1000 / FPS_CAP;
+let lastDrawn = -1e9;
+
 function frame(now) {
+  // Ask for the next frame first: an early return must not end the loop.
+  if (now - lastDrawn < MIN_FRAME_MS - 0.5) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  lastDrawn = now;
   const dt = Math.min(64, now - last); last = now; t += dt / 1000;
   // THE CONTRACT. core.js polls the bus, but a face has to ASK it to
   // publish -- AV.state, AV.env and AV.micLevel only move when tick is
@@ -1395,8 +1470,11 @@ function frame(now) {
     // big bright ones. A uniform dot over the whole face reads as a
     // blob however well it is sampled.
     const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF + cb * 0.55) * d.edge;
-    const col = mix(CRIMSON, HOT,
-    Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick) + cb * 0.85));
+    // Position along crimson -> hot, not the colour itself: the sprite
+    // atlas is already that ramp, so the mix never has to be computed
+    // (nor stringified) per dot.
+    const colT =
+      Math.min(1, near * (0.70 + 0.70 * env + musicT * 0.80 * kick) + cb * 0.85);
     // The rim's dots shrink as well as dim. Fading alone leaves a ring
     // of full-sized ghosts and still reads as a cut line.
     // The radius comes off the GEOMETRIC height, so a closing lid does
@@ -1420,7 +1498,7 @@ function frame(now) {
     // 2026-10-15). Same gradient, same direction, drawn instead as two or
     // three smaller, dimmer dots stepping down it. A dot cannot cross its
     // neighbour, so the shading stays a tone rather than a texture.
-    if (d.g > 1.15 && present > 0.15) {
+    if (!LIGHT && d.g > 1.15 && present > 0.15) {
       const L = spikeLen * (1 + mF * 2.2)
                 * Math.min(1, (d.g - 1.0) * 0.8) * (0.5 + 0.9 * (1 - near));
       const n = Math.hypot(d.gx, d.gy) || 1;
@@ -1434,19 +1512,17 @@ function frame(now) {
         // each step out is dimmer and smaller, so the run fades into the
         // surface instead of ending on a hard last dot
         const fade = (1 - f * 0.72) * (0.10 + 0.26 * present) * d.edge;
-        ctx.fillStyle = rgba(col, Math.max(0, fade));
-        ctx.beginPath();
-        ctx.arc(x + ux * f, y + uy * f, Math.max(0.3, r * (0.42 - 0.12 * f)),
-                0, Math.PI * 2);
-        ctx.fill();
+        sprite(x + ux * f, y + uy * f, Math.max(0.3, r * (0.42 - 0.12 * f)),
+               colT, Math.max(0, fade));
       }
     }
 
-    ctx.fillStyle = rgba(col, a);
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+    sprite(x, y, r, colT, a);
   }
+
+  // The atlas leaves globalAlpha wherever the last dot left it. Everything
+  // after this -- chips, the alert frame, the HUD -- assumes 1.
+  ctx.globalAlpha = 1;
 
   // The Radial hides its panels in music mode behind body.music; same
   // class here, so the CSS above can do the same without the face
