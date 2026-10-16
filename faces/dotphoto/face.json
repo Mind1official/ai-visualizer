@@ -1,4 +1,4 @@
 {
   "title": "The Portrait",
-  "tagline": "The Mask's dot grid driven by a photograph instead of arithmetic: each dot takes its depth, size and light from the luminance under it. Swap source.jpg for any portrait."
+  "tagline": "The Mask's dot grid driven by a photograph instead of arithmetic: each dot takes its depth, size and light from the luminance under it. Swap source.png for any portrait -- a transparent cut-out; the alpha is the stencil."
 }

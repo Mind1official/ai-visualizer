@@ -130,8 +130,8 @@ const gauss = (d2, s) => Math.exp(-d2 / (2 * s * s));
  * old field used height -- displacement, size, brightness, spikes. The
  * rig above it (the mouth, the jaw, the states) is unchanged.
  *
- * Swap `source.jpg` for any portrait. It wants: head filling the frame,
- * strong side light, dark background. */
+ * Swap `source.png` for any portrait -- a transparent cut-out. It wants:
+ * head filling the frame, strong side light, background removed. */
 
 const SRC = "source.png";
 // How much of the image the face coordinates cover. x spans -0.75..0.75,
@@ -144,7 +144,41 @@ let FACE_H = 1.44;
 // Where the mouth lands as a fraction down the image, converted into the
 // same face coordinates the rig uses. MEASURE THIS when swapping the
 // picture -- the jaw hinges on it.
-const MOUTH_FRAC = 0.617;
+// NEW PORTRAIT 2026-10-16 (gpt-image-1, generated to a brief rather than
+// chosen for looks; the previous one is kept beside it as
+// source-previous.png, so this is one line to undo).
+//
+// THE REFERENCE IS source.png. Check `const SRC` before swapping anything:
+// a Portrait.png and a source.jpg used to sit beside it unloaded, and an
+// hour went into swapping, measuring and writing constants off the wrong
+// one before Mind said the face had not changed. Both are gone now.
+//
+// IT MUST STAY RGBA WITH A REAL CUT-OUT. The renderer uses the alpha as
+// its stencil and does its own feathering; flatten the photo onto black
+// and every background pixel counts as head, so the whole frame fills with
+// dots in a rectangle around the face.
+//
+// WHAT THE RIG ACTUALLY NEEDS FROM A PHOTOGRAPH, learned by picking a bad
+// one first: it does not draw a picture, it reads gradients. The handsome
+// side-lit candidate measured a brightness RANGE of 47 down the centre of
+// the face with a lip seam 12 deep, against 166 and 104 for the picture it
+// would have replaced -- the mouth rig had almost nothing to measure,
+// because the side light put the centre of the face in half shadow.
+// Generating to a brief fixed it: frontal key, tight crop, and the two
+// features named out loud (a defined shadow line where the lips meet, a
+// dark edge under the jaw). The one installed scores 159 and 126 -- a
+// DEEPER seam than the face it replaces. Measure a candidate before
+// falling in love with it.
+//
+// The numbers below were not re-guessed. The seam and the chin edge were
+// measured in both pictures and the offsets tuned by eye were carried
+// across, because the tuning is about where the rig sits RELATIVE to a
+// face, not about any one photograph:
+//   old seam 0.615 / MOUTH_FRAC 0.604  ->  -0.011;  new seam 0.594 -> 0.583
+//   old chin 0.735 / CHIN_FRAC  0.725  ->  -0.010;  new chin 0.740 -> 0.730
+//
+// (History on the old portrait: 0.617 -> 0.590 -> 0.604.)
+const MOUTH_FRAC = 0.569;
 let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
 // WHERE THE CHIN ENDS, as a fraction down the same image. MEASURE THIS
 // when swapping the picture, with the mouth: the jaw swings between the
@@ -160,7 +194,7 @@ let MOUTH_Y = (MOUTH_FRAC - 0.5) * FACE_H;
 // chin inside the dying tail, so it barely travelled while the lip above
 // it travelled fully (Mind, 2026-10-15: "the bottom part of your chin
 // does not move"). Measure the EDGE, not the shadow above it.
-const CHIN_FRAC = 0.725;
+const CHIN_FRAC = 0.707;
 let CHIN_Y = (CHIN_FRAC - 0.5) * FACE_H;
 // WHERE THE JAW HINGES. Not a guess and not the mouth: the mandible
 // pivots on the condyles, which sit just in front of the ear holes,
@@ -257,17 +291,23 @@ const JAW_GRIP_SPREAD = 1.20;
 // version -- "take the darkest band across the upper half" -- put them
 // on the eyelids, because lashes and a strong brow are darker than an
 // iris. Mind caught it on the live face in one glance ("off a touch").
-const EYE_FRAC = 0.387, EYE_CFRAC = 0.500, EYE_SEP = 0.113;
+const EYE_FRAC = 0.361, EYE_CFRAC = 0.490, EYE_SEP = 0.099;
 let EYE_Y = (EYE_FRAC - 0.5) * FACE_H;
-// WHERE THE BROWS SIT. Measured on the same 5% grid: the brows run
-// about 0.30 to 0.325 down the picture, so their centre line is 0.312 --
-// a touch under a tenth of the picture above the eyes.
+// WHERE THE BROWS SIT. Re-measured 2026-10-16 on the new reference, on a
+// 1% grid over a 3x crop: the left brow centres at 0.298 and the right at
+// 0.288 (she is not symmetric), so the line is 0.293 -- about 0.068 above
+// the eyes.
+//
+// RE-MEASURE THESE WITH THE EYES, never separately. When the reference
+// changed I moved the mouth and the jaw and left the eyes and brows on the
+// OLD picture's numbers; everything above the nose sat ~0.02 too low and
+// the eyes ~0.014 too far apart. Mind spotted it on the live face.
 //
 // Brows are worth more than they look. They are the only part of a face
 // that can contradict the mouth, which is most of what we read as
 // attitude; a face that talks with a dead brow is a puppet, however
 // good the jaw is.
-const BROW_FRAC = 0.312;
+const BROW_FRAC = 0.293;
 let BROW_Y = (BROW_FRAC - 0.5) * FACE_H;
 // WHERE THE HEAD PIVOTS WHEN IT TILTS. The base of the neck, not the
 // chin -- tilting about anything higher slides the head sideways off
@@ -618,7 +658,12 @@ function build() {
       // Tight enough to be lips, soft enough to have an EDGE rather than
       // a cut: under about 0.010 the band is thinner than the gap between
       // dots, so it stops being a lip and becomes a one-dot seam.
-      const lipU = on ? across * gauss(Math.pow(my + 0.055, 2), 0.011) : 0;
+      // 0.055 -> 0.035 (2026-10-16, Mind: "the upper lip needs to move
+      // down one dot row"). One row is about 0.020 in face units here --
+      // the grid step is STEP * min(W,H)/900 canvas px over `scale`, and
+      // on a 1080-tall window that lands near 0.0205. Only the BAND moves:
+      // which dots the upper lip owns, not where the photograph put it.
+      const lipU = on ? across * gauss(Math.pow(my + 0.035, 2), 0.011) : 0;
       const lipL = on ? across * gauss(Math.pow(my - 0.065, 2), 0.013) : 0;
       const hole = on ? across * gauss(my * my, 0.016) : 0;
       // THE JAW. A hinge, not a ramp. It opens from nothing at the mouth
@@ -1469,7 +1514,19 @@ function frame(now) {
     // the reference, dark areas carry almost no dots and lit ones carry
     // big bright ones. A uniform dot over the whole face reads as a
     // blob however well it is sampled.
-    const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF + cb * 0.55) * d.edge;
+    // THE CHEEKS. A wide swing between shadow and highlight is what makes
+    // this face read as sculpted -- but it hollowed the MIDTONES, and a
+    // cheek is nothing but midtone: the surface stops being steep there,
+    // so it got no shading run either, and the face came out gaunt.
+    // DexterTheMad, in chat, 2026-10-15: "needs some more buccal fat to
+    // look less scary". He was right.
+    //
+    // A hump that peaks at half depth and falls to nothing at both ends,
+    // so the shadows stay black and the highlights stay hot -- only the
+    // flesh in between fills back in.
+    const mid = near * (1 - near) * 4;
+    const a = ((0.11 + 1.45 * near) * (1 + 0.22 * wv) + litF + cb * 0.55
+               + mid * 0.30) * d.edge;
     // Position along crimson -> hot, not the colour itself: the sprite
     // atlas is already that ramp, so the mix never has to be computed
     // (nor stringified) per dot.
@@ -1481,7 +1538,10 @@ function frame(now) {
     // not inflate the dots it brightens.
     const nearG = Math.max(0, Math.min(1, hG * 1.05))
                   * (0.35 + 0.65 * present) * (1 + idleBreath * 0.045) * (1 + mF * 0.55);
-    const r = (0.35 + 3.1 * nearG) * (0.45 + 0.55 * d.edge);
+    // Same hump on the radius: filling the cheek with brighter pinpricks
+    // alone reads as noise, where slightly fatter dots read as flesh.
+    const midG = nearG * (1 - nearG) * 4;
+    const r = (0.35 + 3.1 * nearG + midG * 0.45) * (0.45 + 0.55 * d.edge);
 
     // The spikes: thrown off the steep parts, pointing the way the
     // surface falls away. This is the whole character of the reference
